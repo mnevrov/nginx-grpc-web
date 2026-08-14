@@ -75,7 +75,8 @@ jobs:
           test -f /tmp/starter/nginx-grpc-web/.github/workflows/ci.yml
           cp -a /tmp/starter/nginx-grpc-web/. .
           rm -rf .bootstrap
-          rm -f .github/workflows/bootstrap.yml
+          rm -f .github/workflows/ci.yml
+          test -f .github/workflows/bootstrap.yml
 
       - name: Commit expanded repository
         shell: bash
