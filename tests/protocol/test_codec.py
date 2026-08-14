@@ -18,6 +18,23 @@ def test_decode_text_across_arbitrary_chunks():
     assert frames[0].payload == b"abc"
 
 
+def test_decode_text_allows_padding_between_independently_encoded_frames():
+    data = base64.b64encode(encode_data_frame(b"abc"))
+    trailers = base64.b64encode(
+        encode_data_frame(b"grpc-status:0\r\n", flags=0x80)
+    )
+
+    encoded = data + trailers
+    chunks = [encoded[:5], encoded[5:11], encoded[11:19], encoded[19:]]
+    frames = decode_text_body(chunks)
+
+    assert [frame.payload for frame in frames] == [
+        b"abc",
+        b"grpc-status:0\r\n",
+    ]
+    assert frames[1].is_trailer
+
+
 def test_parse_trailers():
     trailers = parse_trailers(b"grpc-status:0\r\nx-test:yes\r\n")
     assert trailers == {"grpc-status": "0", "x-test": "yes"}
