@@ -1,0 +1,59 @@
+name: Bootstrap repository
+
+on:
+  push:
+    branches:
+      - agent/bootstrap-grpc-web
+    paths:
+      - '.bootstrap/**'
+      - '.github/workflows/bootstrap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bootstrap branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/bootstrap-grpc-web
+          fetch-depth: 0
+
+      - name: Reassemble and verify starter archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03 .bootstrap/part-04 > /tmp/starter.b64
+          test "$(wc -c < /tmp/starter.b64)" -eq 36036
+          printf '%s  %s\n' '34949202addff586d87cb3efc5bad595e5c7a12af7d97c82f11ceda7763a18de' '/tmp/starter.b64' | sha256sum -c -
+          base64 --decode /tmp/starter.b64 > /tmp/starter.tar.gz
+          printf '%s  %s\n' '4c86ae470ac5e06f76fceaf27d7470f3182c51537f972a6b6f714e070d4d64c9' '/tmp/starter.tar.gz' | sha256sum -c -
+          tar -tzf /tmp/starter.tar.gz >/dev/null
+
+      - name: Expand project tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/starter
+          mkdir -p /tmp/starter
+          tar -xzf /tmp/starter.tar.gz -C /tmp/starter
+          test -f /tmp/starter/nginx-grpc-web/AGENTS.md
+          test -f /tmp/starter/nginx-grpc-web/.github/workflows/ci.yml
+          cp -a /tmp/starter/nginx-grpc-web/. .
+          rm -rf .bootstrap
+          rm -f .github/workflows/bootstrap.yml
+
+      - name: Commit expanded repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git status --short
+          git commit -m 'bootstrap grpc-web module'
+          git push origin HEAD:agent/bootstrap-grpc-web
