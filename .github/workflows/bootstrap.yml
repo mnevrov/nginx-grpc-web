@@ -26,7 +26,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          for f in .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03 .bootstrap/part-04; do
+            printf '%s bytes=' "$f"
+            wc -c < "$f"
+            tr -d '\r\n' < "$f" | sha256sum
+          done
           cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03 .bootstrap/part-04 | tr -d '\r\n' > /tmp/starter.b64
+          echo "combined bytes=$(wc -c < /tmp/starter.b64)"
+          sha256sum /tmp/starter.b64
           test "$(wc -c < /tmp/starter.b64)" -eq 36036
           printf '%s  %s\n' '34949202addff586d87cb3efc5bad595e5c7a12af7d97c82f11ceda7763a18de' '/tmp/starter.b64' | sha256sum -c -
           base64 --decode /tmp/starter.b64 > /tmp/starter.tar.gz
