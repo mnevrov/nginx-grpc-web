@@ -42,9 +42,27 @@ def decode_frames(raw: bytes) -> list[Frame]:
 
 
 def decode_text_body(chunks: Iterable[bytes]) -> list[Frame]:
-    encoded = b"".join(chunks)
-    raw = base64.b64decode(encoded, validate=True)
-    return decode_frames(raw)
+    """Decode gRPC-Web text across arbitrary HTTP transport chunks.
+
+    A response is not necessarily one Base64 document. Proxies such as Envoy
+    may encode complete gRPC frames independently, so valid padding (``=``)
+    can occur before later encoded frames. Decode strict Base64 quartets
+    incrementally instead of concatenating the body into one b64decode call.
+    """
+    raw = bytearray()
+    quartet = bytearray()
+
+    for chunk in chunks:
+        for value in chunk:
+            quartet.append(value)
+            if len(quartet) == 4:
+                raw.extend(base64.b64decode(bytes(quartet), validate=True))
+                quartet.clear()
+
+    if quartet:
+        raise ValueError("incomplete grpc-web-text base64 quartet")
+
+    return decode_frames(bytes(raw))
 
 
 def parse_trailers(payload: bytes) -> dict[str, str]:
