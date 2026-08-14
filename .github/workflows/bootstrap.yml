@@ -42,14 +42,22 @@ jobs:
           check_chunk .bootstrap/tail-03-1 d04ef0559ef6bbd4e002ebdc199d69e02ebf34ab633c87235e6fe24f5d12e688
           check_chunk .bootstrap/tail-03-2 b0dc539ab3d79da877ddd2046fb822d38e9ee76a34f22e2f941178fe33e3b07d
           check_chunk .bootstrap/tail-03-3 cd3c87b519d92f5173b5cd985ebcccbb0e6e4341423a0caedf40ee1218fd2f3d
-          check_chunk .bootstrap/tail-04 2a0d655e8f9d38546cd0fa66a84de8b707ce341bed7358575e2bb5f6bb9d9034
-          check_chunk .bootstrap/tail-05 89cbc80c90aafe6f9c567a27f0dde284f093fbaef098b1f81427464db5229366
+          check_chunk .bootstrap/tail-04-0 f23bff088df167c5608a2ea93f9e55552343628d925f72e5e83f7935ad9e0124
+          check_chunk .bootstrap/tail-04-1 f97667fe36a26feb35330f95e0df87f5f168686fd9260788138f7ad1b9caf994
+          check_chunk .bootstrap/tail-04-2 9b6e3c724007234f96cba1afb85c8d35780c3265e628cd7f623b542d2d60fe66
+          check_chunk .bootstrap/tail-04-3 9ad44a3a0bca8c7d3aee7bee991290faf240374f8e4ff59e64303fe31df50203
+          check_chunk .bootstrap/tail-05-0 d8477d9d8ce4094ca0390549efec32b668ef46a02901bdd1eb9fcc2d4b3f2312
+          check_chunk .bootstrap/tail-05-1 6db358d956ab515ea2e990618cc51c8f42779c01278401de95d16d40d2437257
+          check_chunk .bootstrap/tail-05-2 c0a2835590280538f2a1216379f00eb473ca9632b20c417fc85b5a7cf68a5c0f
+          check_chunk .bootstrap/tail-05-3 3f909710e9e66ee9bfe4edba874c2b697bd9f414860ef6cb5c074fdd2f26b6b1
           check_chunk .bootstrap/tail-06 8d52b91d18e92d63230c6735c94a716cfe2d6e073c6b7a36a5e2eea0eed3c474
 
           cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 \
               .bootstrap/tail-00 .bootstrap/tail-01 .bootstrap/tail-02 \
               .bootstrap/tail-03-0 .bootstrap/tail-03-1 .bootstrap/tail-03-2 .bootstrap/tail-03-3 \
-              .bootstrap/tail-04 .bootstrap/tail-05 .bootstrap/tail-06 | tr -d '\r\n' > /tmp/starter.b64
+              .bootstrap/tail-04-0 .bootstrap/tail-04-1 .bootstrap/tail-04-2 .bootstrap/tail-04-3 \
+              .bootstrap/tail-05-0 .bootstrap/tail-05-1 .bootstrap/tail-05-2 .bootstrap/tail-05-3 \
+              .bootstrap/tail-06 | tr -d '\r\n' > /tmp/starter.b64
           test "$(wc -c < /tmp/starter.b64)" -eq 36036
           printf '%s  %s\n' '34949202addff586d87cb3efc5bad595e5c7a12af7d97c82f11ceda7763a18de' '/tmp/starter.b64' | sha256sum -c -
           base64 --decode /tmp/starter.b64 > /tmp/starter.tar.gz
