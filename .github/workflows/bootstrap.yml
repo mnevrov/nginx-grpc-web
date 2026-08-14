@@ -38,15 +38,18 @@ jobs:
           check_chunk .bootstrap/tail-00 175cabcdad17f39c6fcd79826344a3f3aca5179a2915fc569071eb95d1e024e3
           check_chunk .bootstrap/tail-01 6ee1ec15245957874ffbecab53a19ae5c41c11f2e7ee7b30120cab8b02ddf67b
           check_chunk .bootstrap/tail-02 e36ae07ab85025ab703732b396cb3089ab34f61d140db61f3502da914e892280
-          check_chunk .bootstrap/tail-03 7619ceb28e4d8a8dac9206fddc680513bec7323267e08c375d0d0d3d570b829d
+          check_chunk .bootstrap/tail-03-0 799b47fad03edd8c2d695392a10561f267e8a890d41a97299963c30f76ae964f
+          check_chunk .bootstrap/tail-03-1 d04ef0559ef6bbd4e002ebdc199d69e02ebf34ab633c87235e6fe24f5d12e688
+          check_chunk .bootstrap/tail-03-2 b0dc539ab3d79da877ddd2046fb822d38e9ee76a34f22e2f941178fe33e3b07d
+          check_chunk .bootstrap/tail-03-3 cd3c87b519d92f5173b5cd985ebcccbb0e6e4341423a0caedf40ee1218fd2f3d
           check_chunk .bootstrap/tail-04 2a0d655e8f9d38546cd0fa66a84de8b707ce341bed7358575e2bb5f6bb9d9034
           check_chunk .bootstrap/tail-05 89cbc80c90aafe6f9c567a27f0dde284f093fbaef098b1f81427464db5229366
           check_chunk .bootstrap/tail-06 8d52b91d18e92d63230c6735c94a716cfe2d6e073c6b7a36a5e2eea0eed3c474
 
           cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 \
               .bootstrap/tail-00 .bootstrap/tail-01 .bootstrap/tail-02 \
-              .bootstrap/tail-03 .bootstrap/tail-04 .bootstrap/tail-05 \
-              .bootstrap/tail-06 | tr -d '\r\n' > /tmp/starter.b64
+              .bootstrap/tail-03-0 .bootstrap/tail-03-1 .bootstrap/tail-03-2 .bootstrap/tail-03-3 \
+              .bootstrap/tail-04 .bootstrap/tail-05 .bootstrap/tail-06 | tr -d '\r\n' > /tmp/starter.b64
           test "$(wc -c < /tmp/starter.b64)" -eq 36036
           printf '%s  %s\n' '34949202addff586d87cb3efc5bad595e5c7a12af7d97c82f11ceda7763a18de' '/tmp/starter.b64' | sha256sum -c -
           base64 --decode /tmp/starter.b64 > /tmp/starter.tar.gz
