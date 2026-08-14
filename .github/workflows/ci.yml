@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r tests/protocol/requirements.txt
+      - run: make unit
+
+  build-module:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        nginx: ["1.30.2", "1.31.1"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg NGINX_VERSION=${{ matrix.nginx }} -f docker/nginx/Dockerfile .
+
+  reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -r tests/protocol/requirements.txt
+      - run: docker compose up -d --build backend envoy
+      - run: |
+          for i in $(seq 1 30); do
+            if curl -sS -o /dev/null http://127.0.0.1:18081/ 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+      - run: make test-reference
+      - working-directory: tests/browser
+        run: npm install
+      - working-directory: tests/browser
+        run: npx playwright install --with-deps chromium
+      - run: make test-browser
+      - if: always()
+        run: docker compose logs
