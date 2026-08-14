@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: tests/backend/Dockerfile
+
+  envoy:
+    image: envoyproxy/envoy:v1.38.0
+    depends_on:
+      - backend
+    volumes:
+      - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "18081:8081"
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+      args:
+        NGINX_VERSION: "${NGINX_VERSION:-1.30.2}"
+    depends_on:
+      - backend
+    ports:
+      - "18080:8080"

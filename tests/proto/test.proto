@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package grpcwebtest;
+
+service TestService {
+  rpc Unary(EchoRequest) returns (EchoReply);
+  rpc Stream(StreamRequest) returns (stream EchoReply);
+  rpc Fail(FailRequest) returns (EchoReply);
+}
+
+message EchoRequest {
+  string message = 1;
+}
+
+message StreamRequest {
+  string message = 1;
+  uint32 count = 2;
+  uint32 delay_ms = 3;
+}
+
+message FailRequest {
+  int32 code = 1;
+  string message = 2;
+}
+
+message EchoReply {
+  string message = 1;
+  uint32 sequence = 2;
+}
