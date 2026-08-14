@@ -26,14 +26,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for f in .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03 .bootstrap/part-04; do
-            printf '%s bytes=' "$f"
-            wc -c < "$f"
-            tr -d '\r\n' < "$f" | sha256sum
-          done
-          cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 .bootstrap/part-03 .bootstrap/part-04 | tr -d '\r\n' > /tmp/starter.b64
-          echo "combined bytes=$(wc -c < /tmp/starter.b64)"
-          sha256sum /tmp/starter.b64
+          check_chunk() {
+            local file="$1"
+            local expected="$2"
+            tr -d '\r\n' < "$file" > /tmp/chunk
+            printf '%s  %s\n' "$expected" '/tmp/chunk' | sha256sum -c -
+          }
+          check_chunk .bootstrap/part-00 6ed6c667571c9e0320d9f7dedc0bb007344f806196d411c581809cee1ff03123
+          check_chunk .bootstrap/part-01 b5d346b64bdd11796c574869ce78f15ba58769e5fae7ad32be4caba43141f500
+          check_chunk .bootstrap/part-02 109e5b763118a256a4618562f1f7da3e0201f0f0f46fbf9e7934c20b4ef1a981
+          check_chunk .bootstrap/tail-00 175cabcdad17f39c6fcd79826344a3f3aca5179a2915fc569071eb95d1e024e3
+          check_chunk .bootstrap/tail-01 6ee1ec15245957874ffbecab53a19ae5c41c11f2e7ee7b30120cab8b02ddf67b
+          check_chunk .bootstrap/tail-02 e36ae07ab85025ab703732b396cb3089ab34f61d140db61f3502da914e892280
+          check_chunk .bootstrap/tail-03 7619ceb28e4d8a8dac9206fddc680513bec7323267e08c375d0d0d3d570b829d
+          check_chunk .bootstrap/tail-04 2a0d655e8f9d38546cd0fa66a84de8b707ce341bed7358575e2bb5f6bb9d9034
+          check_chunk .bootstrap/tail-05 89cbc80c90aafe6f9c567a27f0dde284f093fbaef098b1f81427464db5229366
+          check_chunk .bootstrap/tail-06 8d52b91d18e92d63230c6735c94a716cfe2d6e073c6b7a36a5e2eea0eed3c474
+
+          cat .bootstrap/part-00 .bootstrap/part-01 .bootstrap/part-02 \
+              .bootstrap/tail-00 .bootstrap/tail-01 .bootstrap/tail-02 \
+              .bootstrap/tail-03 .bootstrap/tail-04 .bootstrap/tail-05 \
+              .bootstrap/tail-06 | tr -d '\r\n' > /tmp/starter.b64
           test "$(wc -c < /tmp/starter.b64)" -eq 36036
           printf '%s  %s\n' '34949202addff586d87cb3efc5bad595e5c7a12af7d97c82f11ceda7763a18de' '/tmp/starter.b64' | sha256sum -c -
           base64 --decode /tmp/starter.b64 > /tmp/starter.tar.gz
