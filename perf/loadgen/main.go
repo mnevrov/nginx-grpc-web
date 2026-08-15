@@ -20,26 +20,28 @@ import (
 const streamMethod = "/grpcwebtest.TestService/Stream"
 
 type config struct {
-	Name            string `json:"name"`
-	Frontend        string `json:"frontend"`
-	URL             string `json:"url"`
-	Transport       string `json:"transport"`
-	Streams         int    `json:"streams"`
-	Messages        int    `json:"messages_per_stream"`
-	DelayMS         int    `json:"backend_delay_ms"`
-	PayloadBytes    int    `json:"payload_bytes"`
-	ConsumerDelayMS int    `json:"consumer_delay_ms"`
-	TimeoutSeconds  int    `json:"timeout_seconds"`
-	Marker          string `json:"marker"`
-	GOMAXPROCS      int    `json:"gomaxprocs"`
-	CAFile          string `json:"ca_file,omitempty"`
-	TLSServerName   string `json:"tls_server_name,omitempty"`
-	RequireHTTP2    bool   `json:"require_http2"`
+	Name                string `json:"name"`
+	Frontend            string `json:"frontend"`
+	URL                 string `json:"url"`
+	Transport           string `json:"transport"`
+	Streams             int    `json:"streams"`
+	Messages            int    `json:"messages_per_stream"`
+	DelayMS             int    `json:"backend_delay_ms"`
+	PayloadBytes        int    `json:"payload_bytes"`
+	ConsumerDelayMS     int    `json:"consumer_delay_ms"`
+	CancelAfterMessages int    `json:"cancel_after_messages,omitempty"`
+	TimeoutSeconds      int    `json:"timeout_seconds"`
+	Marker              string `json:"marker"`
+	GOMAXPROCS          int    `json:"gomaxprocs"`
+	CAFile              string `json:"ca_file,omitempty"`
+	TLSServerName       string `json:"tls_server_name,omitempty"`
+	RequireHTTP2        bool   `json:"require_http2"`
 }
 
 type streamResult struct {
 	ID             int       `json:"id"`
 	Error          string    `json:"error,omitempty"`
+	Cancelled      bool      `json:"cancelled,omitempty"`
 	HTTPStatus     int       `json:"http_status,omitempty"`
 	HTTPProtocol   string    `json:"http_protocol,omitempty"`
 	TLSALPN        string    `json:"tls_alpn,omitempty"`
@@ -65,6 +67,7 @@ type distribution struct {
 type summary struct {
 	StreamsRequested  int          `json:"streams_requested"`
 	StreamsCompleted  int          `json:"streams_completed"`
+	StreamsCancelled  int          `json:"streams_cancelled"`
 	Errors            int          `json:"errors"`
 	DataFrames        int          `json:"data_frames"`
 	PayloadBytes      int64        `json:"payload_bytes"`
@@ -124,6 +127,22 @@ func describe(values []float64) distribution {
 	}
 }
 
+func validateConfig(cfg config) error {
+	if cfg.Streams <= 0 || cfg.Messages <= 0 || cfg.TimeoutSeconds <= 0 {
+		return fmt.Errorf("streams, messages and timeout must be positive")
+	}
+	if cfg.CancelAfterMessages < 0 {
+		return fmt.Errorf("cancel-after must be >= 0")
+	}
+	if cfg.CancelAfterMessages > 0 && cfg.CancelAfterMessages >= cfg.Messages {
+		return fmt.Errorf("cancel-after must be smaller than messages")
+	}
+	if cfg.RequireHTTP2 && !strings.HasPrefix(strings.ToLower(cfg.URL), "https://") {
+		return fmt.Errorf("--require-http2 requires an https:// URL")
+	}
+	return nil
+}
+
 func buildRequestBody(cfg config) ([]byte, string, error) {
 	if cfg.Messages <= 0 || cfg.Messages > int(^uint32(0)) {
 		return nil, "", fmt.Errorf("messages out of uint32 range: %d", cfg.Messages)
@@ -178,7 +197,14 @@ func runStream(ctx context.Context, client *http.Client, cfg config, id int, sta
 		return result
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.URL, "/")+streamMethod, bytes.NewReader(body))
+	streamCtx := ctx
+	var streamCancel context.CancelFunc
+	if cfg.CancelAfterMessages > 0 {
+		streamCtx, streamCancel = context.WithCancel(ctx)
+		defer streamCancel()
+	}
+
+	request, err := http.NewRequestWithContext(streamCtx, http.MethodPost, strings.TrimRight(cfg.URL, "/")+streamMethod, bytes.NewReader(body))
 	if err != nil {
 		result.Error = err.Error()
 		return result
@@ -278,6 +304,16 @@ func runStream(ctx context.Context, client *http.Client, cfg config, id int, sta
 					result.AddedMS = append(result.AddedMS, float64(addedNS)/1e6)
 				}
 
+				if cfg.CancelAfterMessages > 0 && result.DataFrames >= cfg.CancelAfterMessages {
+					result.Cancelled = true
+					result.DurationMS = float64(time.Since(started).Nanoseconds()) / 1e6
+					if streamCancel != nil {
+						streamCancel()
+					}
+					_ = response.Body.Close()
+					return result
+				}
+
 				if cfg.ConsumerDelayMS > 0 {
 					time.Sleep(time.Duration(cfg.ConsumerDelayMS) * time.Millisecond)
 				}
@@ -321,7 +357,11 @@ func summarize(cfg config, streams []streamResult, wall time.Duration) summary {
 			out.Errors++
 			continue
 		}
-		out.StreamsCompleted++
+		if stream.Cancelled {
+			out.StreamsCancelled++
+		} else {
+			out.StreamsCompleted++
+		}
 		out.DataFrames += stream.DataFrames
 		out.PayloadBytes += stream.PayloadBytes
 		out.WireBytes += stream.WireBytes
@@ -379,7 +419,7 @@ func execute(cfg config) (runResult, error) {
 	wall := time.Since(wallStarted)
 
 	return runResult{
-		Version:   2,
+		Version:   3,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Config:    cfg,
 		Summary:   summarize(cfg, streams, wall),
@@ -398,6 +438,7 @@ func main() {
 	flag.IntVar(&cfg.DelayMS, "delay-ms", 20, "backend delay before each DATA message")
 	flag.IntVar(&cfg.PayloadBytes, "payload-bytes", 4096, "EchoReply.message bytes")
 	flag.IntVar(&cfg.ConsumerDelayMS, "consumer-delay-ms", 0, "sleep after each decoded DATA frame")
+	flag.IntVar(&cfg.CancelAfterMessages, "cancel-after", 0, "cancel each stream after N decoded DATA frames (0 disables)")
 	flag.IntVar(&cfg.TimeoutSeconds, "timeout", 120, "whole run timeout in seconds")
 	flag.StringVar(&cfg.Marker, "marker", "perf", "payload prefix marker")
 	flag.IntVar(&cfg.GOMAXPROCS, "gomaxprocs", 0, "load generator GOMAXPROCS (0 keeps runtime default)")
@@ -407,12 +448,8 @@ func main() {
 	output := flag.String("output", "", "JSON output path; stdout when empty")
 	flag.Parse()
 
-	if cfg.Streams <= 0 || cfg.Messages <= 0 || cfg.TimeoutSeconds <= 0 {
-		fmt.Fprintln(os.Stderr, "streams, messages and timeout must be positive")
-		os.Exit(2)
-	}
-	if cfg.RequireHTTP2 && !strings.HasPrefix(strings.ToLower(cfg.URL), "https://") {
-		fmt.Fprintln(os.Stderr, "--require-http2 requires an https:// URL")
+	if err := validateConfig(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
@@ -437,6 +474,10 @@ func main() {
 
 	if result.Summary.Errors != 0 {
 		fmt.Fprintf(os.Stderr, "%d/%d streams failed\n", result.Summary.Errors, result.Summary.StreamsRequested)
+		os.Exit(1)
+	}
+	if cfg.CancelAfterMessages > 0 && result.Summary.StreamsCancelled != result.Summary.StreamsRequested {
+		fmt.Fprintf(os.Stderr, "%d/%d streams cancelled, expected all\n", result.Summary.StreamsCancelled, result.Summary.StreamsRequested)
 		os.Exit(1)
 	}
 }

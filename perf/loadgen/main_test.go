@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func dataFrame(payload []byte) []byte {
@@ -195,5 +196,33 @@ func TestValidateResponseProtocolRejectsHTTP11WhenHTTP2Required(t *testing.T) {
 	}
 	if err := validateResponseProtocol(response, false); err != nil {
 		t.Fatalf("HTTP/1.1 must be accepted when HTTP/2 is optional: %v", err)
+	}
+}
+
+func TestSummarizeAccountsExpectedClientCancellationWithoutError(t *testing.T) {
+	cfg := config{Streams: 2}
+	streams := []streamResult{
+		{ID: 0, Cancelled: true, DataFrames: 2, PayloadBytes: 128},
+		{ID: 1, Cancelled: true, DataFrames: 2, PayloadBytes: 128},
+	}
+
+	got := summarize(cfg, streams, time.Second)
+	if got.Errors != 0 {
+		t.Fatalf("errors=%d, want 0", got.Errors)
+	}
+	if got.StreamsCancelled != 2 {
+		t.Fatalf("cancelled=%d, want 2", got.StreamsCancelled)
+	}
+	if got.StreamsCompleted != 0 {
+		t.Fatalf("completed=%d, want 0", got.StreamsCompleted)
+	}
+}
+
+func TestValidateConfigRejectsInvalidCancelAfter(t *testing.T) {
+	if err := validateConfig(config{Streams: 1, Messages: 5, TimeoutSeconds: 10, CancelAfterMessages: 5}); err == nil {
+		t.Fatal("cancel-after equal to messages must be rejected")
+	}
+	if err := validateConfig(config{Streams: 1, Messages: 5, TimeoutSeconds: 10, CancelAfterMessages: 2}); err != nil {
+		t.Fatalf("valid cancel-after rejected: %v", err)
 	}
 }

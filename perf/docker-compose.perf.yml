@@ -3,6 +3,17 @@ services:
     build:
       context: ..
       dockerfile: tests/backend/Dockerfile
+    # M13 restart testing needs a real transport disruption, not a graceful
+    # drain where the short benchmark RPCs finish during Docker's default 10s
+    # stop timeout. restart therefore escalates immediately after SIGTERM.
+    stop_grace_period: 0s
+
+  fault-backend:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ../tests/fault_backend/server.mjs:/app/server.mjs:ro
+    command: ["node", "/app/server.mjs"]
 
   envoy:
     image: envoyproxy/envoy:v1.38.0
@@ -20,12 +31,14 @@ services:
         BUILD_CC: "${BUILD_CC:-gcc}"
     depends_on:
       - backend
+      - fault-backend
     volumes:
       - ./nginx-native.conf:/etc/nginx/nginx.conf:ro
       - ./.certs:/etc/nginx/perf-tls:ro
     ports:
       - "19080:8080"
       - "19443:8443"
+      - "19446:8446"
 
   legacy-nginx:
     image: "nginx:${NGINX_VERSION:-1.30.4}"

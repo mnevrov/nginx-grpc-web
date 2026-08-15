@@ -179,11 +179,46 @@ native: loadgen -> NGINX(module) -> backend
 
 `perf-h2-*` строго требует валидный TLS chain, HTTP/2 и ALPN `h2`; silent fallback на HTTP/1.1 считается ошибкой. Large profile проверяет 1/4/8 MiB DATA, text/binary и concurrency 1/4/16. CPU/RSS снимаются host-side через cgroup v2.
 
-M11 capacity mode выполняет A/B/B/A на каждой ступени concurrency и классифицирует обе архитектуры по заданному SLO. Capacity — последняя непрерывно проходящая ступень от минимальной нагрузки; случайный pass после первого failed level не повышает результат. Для controlled-host сравнения можно задать одинаковый gateway CPU budget через `PERF_GATEWAY_CPUSET`. Результаты сохраняются в `capacity.json` и `capacity.md`.
+M11 capacity mode выполняет A/B/B/A на каждой ступени concurrency и классифицирует обе архитектуры по заданному SLO. Capacity — последняя непрерывно проходящая ступень от минимальной нагрузки; случайный pass после первого failed level не повышает результат.
 
-Подробности: [`perf/README.md`](perf/README.md) и [`docs/CAPACITY_BENCHMARKS.md`](docs/CAPACITY_BENCHMARKS.md).
+M12 добавляет повторные controlled-host capacity runs и итоговый architecture decision. Strict run требует отдельные непересекающиеся CPU sets для gateway/backend/loadgen и одного host fingerprint во всех repeats. Shared CI всегда остаётся `harness_only` и не может породить production performance claim.
 
-Важно: CI perf/capacity smoke проверяет **измерительный контур**, а не доказывает performance advantage. Для архитектурного решения нужны controlled-host повторные A/B/B/A staircase runs.
+Пример controlled decision run:
+
+```bash
+PERF_FRONTEND=tls-h2 \
+PERF_GATEWAY_CPUSET=2-5 \
+PERF_BACKEND_CPUSET=6-7 \
+PERF_LOADGEN_CPUSET=8-9 \
+PERF_CAPACITY_SLO=/data/slo.json \
+PERF_CONTROLLED_REPEATS=5 \
+bash ./perf/run-controlled.sh
+```
+
+M13 проверяет долговременную устойчивость server streaming: steady/churn/cancel, hard backend restart, upstream transport resets, recovery и RSS trend одного NGINX worker.
+
+```bash
+# короткий harness smoke; не production evidence
+make perf-soak-smoke
+
+# strict controlled soak; default policy >= 2 hours
+PERF_GATEWAY_CPUSET=2-5 \
+PERF_BACKEND_CPUSET=6-7 \
+PERF_LOADGEN_CPUSET=8-9 \
+SOAK_OUTPUT_DIR=/data/bench/soak-2h \
+make perf-soak
+```
+
+Для release candidate рекомендуется отдельный 8-часовой soak (`SOAK_DURATION_SECONDS=28800`). Основной memory gate — RSS slope в MiB/hour после warmup, а не только before/after delta.
+
+Подробности:
+
+- [`perf/README.md`](perf/README.md)
+- [`docs/CAPACITY_BENCHMARKS.md`](docs/CAPACITY_BENCHMARKS.md)
+- [`docs/CONTROLLED_BENCHMARKS.md`](docs/CONTROLLED_BENCHMARKS.md)
+- [`docs/SOAK_TESTING.md`](docs/SOAK_TESTING.md)
+
+Важно: CI perf/capacity/soak smoke проверяет **измерительный контур**, а не доказывает performance advantage или долговременную memory stability. Для архитектурного решения нужны controlled-host repeats; для production-readiness — strict soak.
 
 Другой NGINX target локально:
 
@@ -265,6 +300,8 @@ browser -> LB / ingress -|
 
 Порядок: baseline → dark validation → 1% → 5–10% → 25–50% → 100%, сохраняя Envoy pool warm на согласованное rollback window.
 
+До начала canary должны быть сохранены controlled performance/capacity artifacts M12 и strict soak artifacts M13 для exact release commit.
+
 Полный runbook: [`docs/ROLLOUT.md`](docs/ROLLOUT.md).
 
 Release checklist: [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md).
@@ -278,7 +315,7 @@ tests/fault_backend/  raw HTTP/2 transport-fault injector
 tests/protocol/       protocol/differential/hardening tests
 tests/fuzz/           libFuzzer targets
 tests/browser/        real React + grpc-web + Playwright harness
-perf/                 A/B loadgen, H1/H2, capacity/SLO staircase and reports
+perf/                 A/B loadgen, H1/H2, capacity, controlled decision, soak
 docker/envoy/         reference gateway
 docker/nginx/         NGINX module build/runtime image
 examples/             production configuration examples
@@ -370,5 +407,26 @@ Application gRPC aborts, deadlines и cancellation проходят через s
 - machine-readable `capacity.json` + Markdown report;
 - CI mechanics gates for both frontends;
 - production capacity claims require controlled hardware and repeated full staircase runs.
+
+### M12 — controlled benchmark decision ✅
+
+- strict host fingerprint/preflight;
+- isolated gateway/backend/loadgen CPU sets;
+- repeated full capacity staircases;
+- median/CV aggregation;
+- same-load latency/CPU/RSS comparison;
+- machine-readable `decision.json` + `decision.md`;
+- shared CI forced to `harness_only/inconclusive`.
+
+### M13 — soak / production readiness ✅
+
+- continuous cgroup-v2 RSS trend and MiB/hour slope;
+- steady, churn and exact client-cancellation accounting;
+- hard backend restart during active streams + recovery;
+- repeated raw HTTP/2 transport resets + recovery;
+- final healthy probe;
+- NGINX master PID / Docker RestartCount lifecycle gate;
+- strict 2-hour baseline and recommended 8-hour release soak;
+- shared CI only validates mechanics and remains `harness_only/inconclusive`.
 
 Полная история и exit criteria: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).

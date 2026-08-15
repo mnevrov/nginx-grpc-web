@@ -1,0 +1,8 @@
+{
+  "min_duration_seconds": 7200,
+  "min_samples": 240,
+  "warmup_seconds": 300,
+  "max_rss_slope_mib_per_hour": 8.0,
+  "max_rss_growth_mib": 64.0,
+  "max_peak_rss_mib": null
+}
