@@ -42,8 +42,11 @@ def parse_manifest(path: Path) -> dict[str, str]:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        if key:
-            result[key] = value.strip()
+        if not key:
+            continue
+        if key in result:
+            raise EvidenceInputError(f"artifact manifest has duplicate field: {key}")
+        result[key] = value.strip()
     required = {"module", "nginx_version", "compiler", "platform", "build_mode", "source_commit"}
     missing = sorted(required - set(result))
     if missing:
