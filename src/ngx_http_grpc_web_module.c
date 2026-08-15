@@ -139,6 +139,32 @@ ngx_module_t ngx_http_grpc_web_module = {
     NGX_MODULE_V1_PADDING
 };
 
+static ngx_flag_t
+ngx_http_grpc_web_media_type_eq(ngx_str_t *value,
+    const char *expected, size_t expected_len)
+{
+    size_t len;
+    u_char *first, *last, *semi;
+
+    first = value->data;
+    last = value->data + value->len;
+    semi = ngx_strlchr(first, last, ';');
+    if (semi != NULL) {
+        last = semi;
+    }
+
+    while (first < last && (*first == ' ' || *first == '\t')) {
+        first++;
+    }
+    while (last > first && (last[-1] == ' ' || last[-1] == '\t')) {
+        last--;
+    }
+
+    len = (size_t) (last - first);
+    return len == expected_len
+        && ngx_strncasecmp(first, (u_char *) expected, expected_len) == 0;
+}
+
 static ngx_int_t
 ngx_http_grpc_web_content_type_mode(ngx_http_request_t *r)
 {
@@ -152,18 +178,22 @@ ngx_http_grpc_web_content_type_mode(ngx_http_request_t *r)
 
     v = ct->value;
 
-    if (v.len >= sizeof("application/grpc-web-text") - 1
-        && ngx_strncasecmp(v.data,
-                          (u_char *) "application/grpc-web-text",
-                          sizeof("application/grpc-web-text") - 1) == 0)
+    if (ngx_http_grpc_web_media_type_eq(
+            &v, "application/grpc-web-text+proto",
+            sizeof("application/grpc-web-text+proto") - 1)
+        || ngx_http_grpc_web_media_type_eq(
+            &v, "application/grpc-web-text",
+            sizeof("application/grpc-web-text") - 1))
     {
         return NGX_GRPC_WEB_MODE_TEXT;
     }
 
-    if (v.len >= sizeof("application/grpc-web") - 1
-        && ngx_strncasecmp(v.data,
-                          (u_char *) "application/grpc-web",
-                          sizeof("application/grpc-web") - 1) == 0)
+    if (ngx_http_grpc_web_media_type_eq(
+            &v, "application/grpc-web+proto",
+            sizeof("application/grpc-web+proto") - 1)
+        || ngx_http_grpc_web_media_type_eq(
+            &v, "application/grpc-web",
+            sizeof("application/grpc-web") - 1))
     {
         return NGX_GRPC_WEB_MODE_BINARY;
     }
