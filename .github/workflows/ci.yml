@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     runs-on: ubuntu-latest
@@ -27,22 +31,51 @@ jobs:
   build-module:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        nginx: ["1.30.2", "1.31.1"]
+        nginx: ["1.30.4", "1.31.3"]
+        compiler: ["gcc", "clang"]
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --build-arg NGINX_VERSION=${{ matrix.nginx }} -f docker/nginx/Dockerfile .
+      - run: >-
+          docker build
+          --build-arg NGINX_VERSION=${{ matrix.nginx }}
+          --build-arg BUILD_CC=${{ matrix.compiler }}
+          -f docker/nginx/Dockerfile .
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make package-module NGINX_VERSION=1.30.4 BUILD_CC=gcc
+      - run: |
+          set -euo pipefail
+          package_dir="dist/nginx-1.30.4-gcc-linux-$(uname -m)"
+          test -f "$package_dir/ngx_http_grpc_web_module.so"
+          test -f "$package_dir/MANIFEST.txt"
+          sha256sum -c "$package_dir/SHA256SUMS"
+          grep -Fx 'nginx_version=1.30.4' "$package_dir/MANIFEST.txt"
+          grep -Fx 'compiler=gcc' "$package_dir/MANIFEST.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ngx-http-grpc-web-nginx-1.30.4-gcc-linux-amd64
+          path: dist/nginx-1.30.4-gcc-linux-x86_64/
+          retention-days: 7
 
   integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx: ["1.30.4", "1.31.3"]
+    env:
+      NGINX_VERSION: ${{ matrix.nginx }}
+      BUILD_CC: gcc
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       - run: pip install -r tests/protocol/requirements.txt
       - run: docker compose up -d --build backend envoy nginx
       - run: |
@@ -61,10 +94,48 @@ jobs:
       - run: make test-reference
       - run: make test-module
       - run: make test-diff
+      - if: always()
+        run: docker compose logs
+
+  browser:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: ["chromium", "firefox", "webkit"]
+    env:
+      NGINX_VERSION: "1.30.4"
+      BUILD_CC: gcc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: docker compose up -d --build backend envoy nginx
+      - run: |
+          set -euo pipefail
+          for url in http://127.0.0.1:18081/ http://127.0.0.1:18080/; do
+            ready=0
+            for i in $(seq 1 45); do
+              if curl -sS -o /dev/null "$url" 2>/dev/null; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+            test "$ready" -eq 1
+          done
       - working-directory: tests/browser
         run: npm install
       - working-directory: tests/browser
-        run: npx playwright install --with-deps chromium
-      - run: make test-browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: make test-browser BROWSER=${{ matrix.browser }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-${{ matrix.browser }}-failure
+          path: tests/browser/test-results/
+          if-no-files-found: error
+          retention-days: 3
       - if: always()
         run: docker compose logs

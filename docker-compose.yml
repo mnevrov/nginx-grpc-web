@@ -29,7 +29,8 @@ services:
       context: .
       dockerfile: docker/nginx/Dockerfile
       args:
-        NGINX_VERSION: "${NGINX_VERSION:-1.30.2}"
+        NGINX_VERSION: "${NGINX_VERSION:-1.30.4}"
+        BUILD_CC: "${BUILD_CC:-gcc}"
     depends_on:
       - backend
       - fault-backend

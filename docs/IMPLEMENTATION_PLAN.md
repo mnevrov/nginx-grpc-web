@@ -133,18 +133,39 @@ Therefore M7 does **not** invent a stronger terminal contract for NGINX than the
 
 This distinction keeps the test oracle semantic rather than accidentally encoding an implementation-specific expectation.
 
-## M8 — Compatibility & rollout
+## M8 — Compatibility & rollout ✅
 
-- current NGINX stable + mainline compatibility matrix;
-- GCC + Clang module builds;
-- Chromium + Firefox + WebKit browser matrix where supported by `grpc-web`/Playwright;
-- installation and packaging instructions for the dynamic module;
-- production NGINX configuration examples;
-- observability and operational guidance;
-- safe Envoy -> NGINX rollout/canary/rollback guide;
-- final release checklist and versioned artifact guidance.
+- compatibility matrix moved to current NGINX stable `1.30.4` and mainline `1.31.3`;
+- previous `1.30.2 / 1.31.1` targets retired from production guidance because later NGINX security releases include a fix affecting `ngx_http_grpc_module`;
+- dynamic module builds on both NGINX lines with GCC and Clang;
+- build gate performs real `load_module` validation through `nginx -t`, not only compilation;
+- full protocol/hardening/differential suite runs on stable and mainline;
+- real React/`grpc-web` browser suite is split across Chromium, Firefox and WebKit on stable;
+- Docker `module-artifact` target and `make package-module` produce versioned `.so` directory with SHA256 and manifest;
+- CI package smoke verifies the artifact and stores it as a short-lived Actions artifact;
+- production configuration example added under `examples/`;
+- compatibility/installation/observability guidance added;
+- Envoy -> NGINX canary and rollback procedure added;
+- v0.1 release checklist and binary-artifact contract added;
+- PR CI now cancels superseded runs so only the latest head consumes the full compatibility matrix.
 
 **Exit:** supported build/runtime matrix documented and green; operators have a reproducible installation, migration, verification and rollback procedure for v0.1.
+
+### M8 compatibility finding
+
+Compatibility is deliberately defined narrower than “a `.so` loads everywhere”. Prebuilt artifacts are tagged with exact NGINX version, compiler, platform and source commit. The Docker-produced binary is validated against the matching official `nginx:<version>` image. Existing distro/vendor NGINX installations must be checked with `nginx -V`; if ABI compatibility is uncertain, the module is rebuilt on the target platform instead of assuming portability.
+
+### M8 rollout model
+
+Canary traffic is recommended between independent legacy and native gateway pools:
+
+```text
+                         +-> legacy gateway -> Envoy -> backend
+browser -> LB / ingress -|
+                         +-> native gateway -> NGINX module -> backend
+```
+
+This keeps rollback independent from the frontend and reduces it to routing weight change. Envoy should remain warm for an agreed rollback window after reaching 100% native traffic.
 
 ## PR discipline
 
