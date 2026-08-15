@@ -21,6 +21,7 @@ message StreamRequest {
   int32 fail_code = 6;
   string fail_message = 7;
   uint32 response_payload_bytes = 8;
+  bool include_server_timing = 9;
 }
 
 message FailRequest {
@@ -31,4 +32,5 @@ message FailRequest {
 message EchoReply {
   string message = 1;
   uint32 sequence = 2;
+  uint64 server_elapsed_ns = 3;
 }
