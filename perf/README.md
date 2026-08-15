@@ -71,23 +71,25 @@ Go loadgen сохраняет:
 
 ## CPU / RSS
 
-`sample-stats.sh` снимает Docker CPU% и memory usage только для gateway containers текущего path:
+`sample-stats.sh` читает **cgroup v2** counters gateway containers с host-а:
 
 ```text
 native: native-nginx
 legacy: legacy-nginx + envoy
 ```
 
-`report.py` суммирует CPU legacy-пары и оценивает:
+Для каждого container сохраняются cumulative `cpu.stat:usage_usec` и `memory.current`. Измерение через host cgroup принципиально лучше для коротких streaming runs, чем `docker stats --no-stream`: нет ~1 s задержки sampler-а и не запускаются дополнительные процессы внутри измеряемого container.
+
+`report.py` считает:
 
 ```text
-CPU core-seconds ~= avg(sum(container CPU%)) / 100 * wall_seconds
+CPU core-seconds = Σ(last usage_usec - first usage_usec) / 1_000_000
 CPU core-seconds / GiB = core-seconds / useful payload GiB
 ```
 
-Peak RSS для legacy также считается как сумма NGINX + Envoy в одном sample.
+Для legacy CPU суммируется по front NGINX + Envoy. Peak RSS берётся как максимальная во времени сумма `memory.current` тех же gateway containers. Каждый measured run обязан иметь минимум два cgroup sample; иначе report завершается ошибкой вместо публикации нулевых CPU/RSS.
 
-Для короткого smoke sampling слишком грубый; CPU/GiB имеет смысл на достаточно длинных dedicated-host runs.
+Требование perf host: Linux cgroup v2 с доступным `/proc/<container-pid>/cgroup` и `/sys/fs/cgroup`. Обычные современные Docker hosts, включая текущий Ubuntu GitHub runner, этому соответствуют.
 
 ## Fair benchmark rules
 
@@ -101,6 +103,8 @@ Peak RSS для legacy также считается как сумма NGINX + E
 6. чередовать A/B/B/A или randomize order;
 7. сохранять raw JSON до любой агрегации;
 8. отдельно следить, чтобы load generator CPU не стал bottleneck.
+
+Автоматический runner сначала прогревает оба gateway path маленьким discarded stream, затем начинает measured A/B runs. Cgroup sampler обязан записать baseline до старта loadgen и финальный sample после его завершения.
 
 ### CPU budget
 
@@ -143,7 +147,7 @@ perf/
 
 ```text
 *.json       raw loadgen result
-*.stats.tsv  raw Docker CPU/RSS samples
+*.stats.tsv  raw cgroup CPU/RSS samples
 report.json  aggregated machine-readable comparison
 report.md    human-readable A/B table
 ```
