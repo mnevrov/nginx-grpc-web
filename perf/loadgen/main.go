@@ -21,6 +21,7 @@ const streamMethod = "/grpcwebtest.TestService/Stream"
 
 type config struct {
 	Name            string `json:"name"`
+	Frontend        string `json:"frontend"`
 	URL             string `json:"url"`
 	Transport       string `json:"transport"`
 	Streams         int    `json:"streams"`
@@ -31,12 +32,18 @@ type config struct {
 	TimeoutSeconds  int    `json:"timeout_seconds"`
 	Marker          string `json:"marker"`
 	GOMAXPROCS      int    `json:"gomaxprocs"`
+	CAFile          string `json:"ca_file,omitempty"`
+	TLSServerName   string `json:"tls_server_name,omitempty"`
+	RequireHTTP2    bool   `json:"require_http2"`
 }
 
 type streamResult struct {
 	ID             int       `json:"id"`
 	Error          string    `json:"error,omitempty"`
 	HTTPStatus     int       `json:"http_status,omitempty"`
+	HTTPProtocol   string    `json:"http_protocol,omitempty"`
+	TLSALPN        string    `json:"tls_alpn,omitempty"`
+	TLSVersion     string    `json:"tls_version,omitempty"`
 	HeaderMS       float64   `json:"header_ms,omitempty"`
 	TTFDMS         float64   `json:"ttfd_ms,omitempty"`
 	DurationMS     float64   `json:"duration_ms,omitempty"`
@@ -189,7 +196,17 @@ func runStream(ctx context.Context, client *http.Client, cfg config, id int, sta
 	defer response.Body.Close()
 
 	result.HTTPStatus = response.StatusCode
+	result.HTTPProtocol = response.Proto
+	if response.TLS != nil {
+		result.TLSALPN = response.TLS.NegotiatedProtocol
+		result.TLSVersion = tlsVersionName(response.TLS.Version)
+	}
 	result.HeaderMS = float64(time.Since(started).Nanoseconds()) / 1e6
+	if err := validateResponseProtocol(response, cfg.RequireHTTP2); err != nil {
+		result.Error = err.Error()
+		_, _ = io.Copy(io.Discard, response.Body)
+		return result
+	}
 	if response.StatusCode != http.StatusOK {
 		result.Error = fmt.Sprintf("HTTP %d", response.StatusCode)
 		_, _ = io.Copy(io.Discard, response.Body)
@@ -330,18 +347,14 @@ func summarize(cfg config, streams []streamResult, wall time.Duration) summary {
 	return out
 }
 
-func execute(cfg config) runResult {
+func execute(cfg config) (runResult, error) {
 	if cfg.GOMAXPROCS > 0 {
 		runtime.GOMAXPROCS(cfg.GOMAXPROCS)
 	}
 
-	transport := &http.Transport{
-		DisableCompression:    true,
-		MaxIdleConns:          cfg.Streams * 2,
-		MaxIdleConnsPerHost:   cfg.Streams * 2,
-		MaxConnsPerHost:       0,
-		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
+	transport, err := newHTTPTransport(cfg)
+	if err != nil {
+		return runResult{}, err
 	}
 	client := &http.Client{Transport: transport}
 	defer transport.CloseIdleConnections()
@@ -366,17 +379,18 @@ func execute(cfg config) runResult {
 	wall := time.Since(wallStarted)
 
 	return runResult{
-		Version:   1,
+		Version:   2,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Config:    cfg,
 		Summary:   summarize(cfg, streams, wall),
 		Streams:   streams,
-	}
+	}, nil
 }
 
 func main() {
 	cfg := config{}
 	flag.StringVar(&cfg.Name, "name", "benchmark", "result label")
+	flag.StringVar(&cfg.Frontend, "frontend", "http1", "frontend mode label: http1 or tls-h2")
 	flag.StringVar(&cfg.URL, "url", "http://127.0.0.1:19080", "gateway base URL")
 	flag.StringVar(&cfg.Transport, "transport", "text", "grpc-web transport: text or binary")
 	flag.IntVar(&cfg.Streams, "streams", 10, "concurrent server streams")
@@ -387,6 +401,9 @@ func main() {
 	flag.IntVar(&cfg.TimeoutSeconds, "timeout", 120, "whole run timeout in seconds")
 	flag.StringVar(&cfg.Marker, "marker", "perf", "payload prefix marker")
 	flag.IntVar(&cfg.GOMAXPROCS, "gomaxprocs", 0, "load generator GOMAXPROCS (0 keeps runtime default)")
+	flag.StringVar(&cfg.CAFile, "ca-file", "", "PEM CA file for HTTPS benchmark endpoints")
+	flag.StringVar(&cfg.TLSServerName, "tls-server-name", "", "TLS certificate server name override")
+	flag.BoolVar(&cfg.RequireHTTP2, "require-http2", false, "require TLS HTTP/2 with ALPN h2")
 	output := flag.String("output", "", "JSON output path; stdout when empty")
 	flag.Parse()
 
@@ -394,8 +411,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "streams, messages and timeout must be positive")
 		os.Exit(2)
 	}
+	if cfg.RequireHTTP2 && !strings.HasPrefix(strings.ToLower(cfg.URL), "https://") {
+		fmt.Fprintln(os.Stderr, "--require-http2 requires an https:// URL")
+		os.Exit(2)
+	}
 
-	result := execute(cfg)
+	result, err := execute(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "execute benchmark: %v\n", err)
+		os.Exit(1)
+	}
 	encoded, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "encode result: %v\n", err)
