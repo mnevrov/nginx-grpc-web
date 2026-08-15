@@ -6,7 +6,13 @@ import time
 import httpx
 import pytest
 
-from grpc_web import decode_frames, decode_text_body, encode_data_frame, parse_trailers
+from grpc_web import (
+    decode_frames,
+    decode_text_body,
+    encode_data_frame,
+    iter_text_frames,
+    parse_trailers,
+)
 
 
 MODULE = os.getenv("MODULE_URL", "http://127.0.0.1:18080")
@@ -60,6 +66,12 @@ def text_headers(**extra: str) -> dict[str, str]:
     }
 
 
+def fault_request_body(mode: str) -> bytes:
+    return base64.b64encode(
+        encode_data_frame(protobuf_string_field_1(f"fault-{mode}"))
+    )
+
+
 def nginx_rss_kb() -> int:
     script = r'''
 awk '
@@ -77,15 +89,11 @@ awk '
 
 
 def consume_fault(mode: str) -> None:
-    body = base64.b64encode(
-        encode_data_frame(protobuf_string_field_1(f"fault-{mode}"))
-    )
-
     try:
         with httpx.stream(
             "POST",
             f"{FAULT_MODULE}/grpcwebtest.TestService/Stream",
-            content=body,
+            content=fault_request_body(mode),
             headers=text_headers(**{"x-fault-mode": mode}),
             timeout=3,
         ) as response:
@@ -96,6 +104,40 @@ def consume_fault(mode: str) -> None:
         # A filter/upstream transport failure after HTTP 200 may terminate the
         # HTTP/1 downstream connection rather than produce a complete body.
         pass
+
+
+def observe_first_fault_data(mode: str) -> bytes:
+    timeout = httpx.Timeout(2.0, read=0.35)
+
+    with httpx.stream(
+        "POST",
+        f"{FAULT_MODULE}/grpcwebtest.TestService/Stream",
+        content=fault_request_body(mode),
+        headers=text_headers(**{"x-fault-mode": mode}),
+        timeout=timeout,
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith(
+            "application/grpc-web-text"
+        )
+
+        frames = iter_text_frames(response.iter_raw())
+        first = next(frames)
+        assert not first.is_trailer
+
+        # Let the injected RST_STREAM/TCP reset become observable upstream,
+        # then attempt to advance once. Envoy itself may leave the browser RPC
+        # open after an after-DATA reset, so EOF, protocol error and a bounded
+        # read timeout are all legitimate transport outcomes here. The hard
+        # invariants are preservation of the completed DATA frame and healthy,
+        # bounded NGINX lifecycle after the fault.
+        time.sleep(0.05)
+        try:
+            next(frames)
+        except (StopIteration, httpx.HTTPError, ValueError):
+            pass
+
+        return first.payload
 
 
 def assert_main_path_still_healthy() -> None:
@@ -167,6 +209,32 @@ def test_truncated_native_frame_does_not_poison_worker_state():
     for _ in range(10):
         consume_fault("truncated-frame")
 
+    assert_main_path_still_healthy()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("mode", ["rst-after-data", "tcp-reset-after-data"])
+def test_after_data_transport_fault_preserves_completed_data(mode: str):
+    payload = observe_first_fault_data(mode)
+    expected = protobuf_string_field_1("before-transport-fault") + bytes([0x10, 0x01])
+
+    assert payload == expected
+    assert_main_path_still_healthy()
+
+
+@pytest.mark.integration
+def test_repeated_after_data_transport_faults_do_not_accumulate_request_memory():
+    before = nginx_rss_kb()
+
+    for mode in ("rst-after-data", "tcp-reset-after-data"):
+        for _ in range(8):
+            payload = observe_first_fault_data(mode)
+            assert payload.startswith(protobuf_string_field_1("before-transport-fault"))
+
+    time.sleep(0.3)
+    after = nginx_rss_kb()
+
+    assert after - before < 16 * 1024
     assert_main_path_still_healthy()
 
 
