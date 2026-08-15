@@ -51,8 +51,10 @@ Tooling считается реализованным только после me
 - [x] deterministic pure release evaluator реализован в M14 branch;
 - [x] failure-mode tests включают checksum, stale SHA, host mismatch, short soak и `harness_only` promotion;
 - [x] collector пересчитывает artifact SHA256 и читает package/M12/M13 provenance;
+- [x] production path повторно вычисляет M11 capacity, M12 decision и M13 soak из raw evidence;
+- [x] final verdict требует `raw_revalidation.valid == true` для controlled evidence;
 - [x] `make release-check` формирует self-contained evidence bundle;
-- [x] shared-CI design требует `harness_only/inconclusive`;
+- [x] shared-CI design требует `harness_only/inconclusive` и явный `revalidation.skipped=harness_only`;
 - [ ] exact M14 PR head release-evidence workflow green;
 - [ ] M14 merged в `main`;
 - [ ] post-merge release-evidence mechanics run green.
@@ -97,11 +99,15 @@ Shared GitHub runner не закрывает этот раздел.
 - [ ] host fingerprint сохранён;
 - [ ] минимум policy-defined repeat count выполнен;
 - [ ] full TLS/H2 capacity staircases сохранены;
+- [ ] `slo.json` и `decision-policy.json` сохранены вместе с результатами;
+- [ ] каждый `repeat-*` содержит `host.json`, raw `report.json` и `capacity.json`;
 - [ ] repeat variance укладывается в policy;
 - [ ] `decision.json.evidence_class == controlled`;
 - [ ] architecture decision не `inconclusive`;
 - [ ] controlled manifest source commit совпадает с release commit;
-- [ ] raw repeat artifacts сохранены в release bundle.
+- [ ] raw repeat artifacts сохранены в release bundle;
+- [ ] повторно вычисленные `capacity.revalidated.json` совпадают с исходными `capacity.json`;
+- [ ] повторно вычисленный `decision.revalidated.json` совпадает с исходным `decision.json`.
 
 ## 6. Strict soak evidence
 
@@ -113,6 +119,7 @@ Shared `perf-soak-smoke` проверяет orchestration и **не закрыв
 - [ ] source commit совпадает с release commit;
 - [ ] host fingerprint совпадает с M12 controlled decision;
 - [ ] duration `>= 7200 s`;
+- [ ] `soak-policy.json`, `events.json` и `nginx.stats.tsv` сохранены;
 - [ ] RSS slope/growth policy green;
 - [ ] steady/churn/cancel accounting green;
 - [ ] hard backend disruption наблюдался и recovery green;
@@ -121,7 +128,8 @@ Shared `perf-soak-smoke` проверяет orchestration и **не закрыв
 - [ ] NGINX master/container не перезапускались;
 - [ ] `soak.json.evidence_class == controlled`;
 - [ ] `soak.json.verdict == soak_pass`;
-- [ ] raw samples/events/cycles сохранены.
+- [ ] raw samples/events/cycles сохранены;
+- [ ] повторно вычисленный `soak.revalidated.json` совпадает с исходным `soak.json`.
 
 ### Recommended 8-hour RC soak
 
@@ -136,6 +144,7 @@ Shared `perf-soak-smoke` проверяет orchestration и **не закрыв
 ```text
 dist/release/v0.1.0-rc/
   gates.json
+  revalidation.json
   release-evidence.json
   release-evidence.md
   artifacts/...
@@ -144,6 +153,8 @@ dist/release/v0.1.0-rc/
 ```
 
 - [ ] `make release-check` завершился успешно без `RELEASE_ALLOW_INCONCLUSIVE=1`;
+- [ ] `revalidation.json.valid == true`;
+- [ ] `release-evidence.json.raw_revalidation.valid == true`;
 - [ ] `evidence_class == controlled`;
 - [ ] `verdict == release_candidate`;
 - [ ] blockers пусты;
