@@ -20,6 +20,7 @@ message StreamRequest {
   uint32 fail_after = 5;
   int32 fail_code = 6;
   string fail_message = 7;
+  uint32 response_payload_bytes = 8;
 }
 
 message FailRequest {
