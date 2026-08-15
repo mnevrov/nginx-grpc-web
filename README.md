@@ -164,6 +164,10 @@ make perf-h2-smoke
 make perf-h2-typical
 make perf-h2-large
 make perf-h2-slow
+
+# SLO-driven sustainable-capacity staircase
+PERF_CAPACITY_SLO=/data/slo.json make perf-capacity
+PERF_CAPACITY_SLO=/data/slo.json make perf-h2-capacity
 ```
 
 Perf suite сравнивает:
@@ -173,9 +177,13 @@ legacy: loadgen -> NGINX -> Envoy -> backend
 native: loadgen -> NGINX(module) -> backend
 ```
 
-`perf-h2-*` строго требует валидный TLS chain, HTTP/2 и ALPN `h2`; silent fallback на HTTP/1.1 считается ошибкой. Large profile проверяет 1/4/8 MiB DATA, text/binary и concurrency 1/4/16. CPU/RSS снимаются host-side через cgroup v2. Подробности: [`perf/README.md`](perf/README.md).
+`perf-h2-*` строго требует валидный TLS chain, HTTP/2 и ALPN `h2`; silent fallback на HTTP/1.1 считается ошибкой. Large profile проверяет 1/4/8 MiB DATA, text/binary и concurrency 1/4/16. CPU/RSS снимаются host-side через cgroup v2.
 
-Важно: CI perf smoke проверяет **измерительный контур**, а не доказывает performance advantage. Для архитектурного решения нужны controlled-host A/B/B/A runs.
+M11 capacity mode выполняет A/B/B/A на каждой ступени concurrency и классифицирует обе архитектуры по заданному SLO. Capacity — последняя непрерывно проходящая ступень от минимальной нагрузки; случайный pass после первого failed level не повышает результат. Для controlled-host сравнения можно задать одинаковый gateway CPU budget через `PERF_GATEWAY_CPUSET`. Результаты сохраняются в `capacity.json` и `capacity.md`.
+
+Подробности: [`perf/README.md`](perf/README.md) и [`docs/CAPACITY_BENCHMARKS.md`](docs/CAPACITY_BENCHMARKS.md).
+
+Важно: CI perf/capacity smoke проверяет **измерительный контур**, а не доказывает performance advantage. Для архитектурного решения нужны controlled-host повторные A/B/B/A staircase runs.
 
 Другой NGINX target локально:
 
@@ -270,7 +278,7 @@ tests/fault_backend/  raw HTTP/2 transport-fault injector
 tests/protocol/       protocol/differential/hardening tests
 tests/fuzz/           libFuzzer targets
 tests/browser/        real React + grpc-web + Playwright harness
-perf/                 A/B loadgen, HTTP1 + TLS/H2 topology and reports
+perf/                 A/B loadgen, H1/H2, capacity/SLO staircase and reports
 docker/envoy/         reference gateway
 docker/nginx/         NGINX module build/runtime image
 examples/             production configuration examples
@@ -343,7 +351,7 @@ Application gRPC aborts, deadlines и cancellation проходят через s
 - JSON + Markdown reports;
 - CI topology smoke without treating shared-runner numbers as a performance result.
 
-### M10 — TLS/HTTP2 benchmark path
+### M10 — TLS/HTTP2 benchmark path ✅
 
 - production-like TLS + HTTP/2 listener on both gateway paths;
 - ephemeral benchmark CA/certificate;
@@ -351,5 +359,16 @@ Application gRPC aborts, deadlines и cancellation проходят через s
 - protocol/TLS metadata in raw results;
 - separate `perf-h2-*` profiles and CI gate;
 - frontend dimension in reports so HTTP/1.1 and TLS/H2 samples cannot be mixed accidentally.
+
+### M11 — capacity / SLO staircase ✅
+
+- SLO-driven sustainable-capacity classifier;
+- contiguous-pass rule and first-failure boundary;
+- A/B/B/A at each concurrency level;
+- HTTP/1 + TLS/H2 capacity targets;
+- optional equal gateway CPU-set budget;
+- machine-readable `capacity.json` + Markdown report;
+- CI mechanics gates for both frontends;
+- production capacity claims require controlled hardware and repeated full staircase runs.
 
 Полная история и exit criteria: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
