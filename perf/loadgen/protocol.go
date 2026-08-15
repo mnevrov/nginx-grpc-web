@@ -169,7 +169,7 @@ func readVarint(data []byte, offset *int) (uint64, error) {
 			return 0, fmt.Errorf("truncated varint")
 		}
 		b := data[*offset]
-		*offset++
+		*offset = *offset + 1
 		value |= uint64(b&0x7f) << shift
 		if b&0x80 == 0 {
 			return value, nil
