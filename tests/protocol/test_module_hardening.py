@@ -1,5 +1,7 @@
 import base64
 import os
+import subprocess
+import time
 
 import httpx
 import pytest
@@ -8,6 +10,7 @@ from grpc_web import decode_frames, decode_text_body, encode_data_frame, parse_t
 
 
 MODULE = os.getenv("MODULE_URL", "http://127.0.0.1:18080")
+FAULT_MODULE = os.getenv("NGINX_FAULT_URL", "http://127.0.0.1:18086")
 
 
 def protobuf_string_field_1(value: str) -> bytes:
@@ -46,6 +49,59 @@ def assert_grpc_web_success(response: httpx.Response) -> None:
     assert frames
     assert frames[-1].is_trailer
     assert parse_trailers(frames[-1].payload)["grpc-status"] == "0"
+
+
+def text_headers(**extra: str) -> dict[str, str]:
+    return {
+        "content-type": "application/grpc-web-text+proto",
+        "x-grpc-web": "1",
+        "accept": "application/grpc-web-text+proto",
+        **extra,
+    }
+
+
+def nginx_rss_kb() -> int:
+    script = r'''
+awk '
+  /^Name:/ { is_nginx = ($2 == "nginx") }
+  /^VmRSS:/ && is_nginx { sum += $2 }
+  END { print sum + 0 }
+' /proc/[0-9]*/status 2>/dev/null
+'''
+    raw = subprocess.check_output(
+        ["docker", "compose", "exec", "-T", "nginx", "sh", "-c", script],
+        text=True,
+        timeout=5,
+    )
+    return int(raw.strip())
+
+
+def consume_fault(mode: str) -> None:
+    body = base64.b64encode(
+        encode_data_frame(protobuf_string_field_1(f"fault-{mode}"))
+    )
+
+    try:
+        with httpx.stream(
+            "POST",
+            f"{FAULT_MODULE}/grpcwebtest.TestService/Stream",
+            content=body,
+            headers=text_headers(**{"x-fault-mode": mode}),
+            timeout=3,
+        ) as response:
+            assert response.status_code == 200
+            for _ in response.iter_raw():
+                pass
+    except httpx.HTTPError:
+        # A filter/upstream transport failure after HTTP 200 may terminate the
+        # HTTP/1 downstream connection rather than produce a complete body.
+        pass
+
+
+def assert_main_path_still_healthy() -> None:
+    assert_grpc_web_success(
+        post_with_content_type("application/grpc-web-text+proto", text=True)
+    )
 
 
 @pytest.mark.integration
@@ -87,3 +143,83 @@ def test_nginx_accepts_only_supported_media_type_token_with_optional_parameters(
     content_type: str, text: bool
 ):
     assert_grpc_web_success(post_with_content_type(content_type, text=text))
+
+
+@pytest.mark.integration
+def test_oversized_native_frame_is_rejected_before_memory_amplification():
+    before = nginx_rss_kb()
+
+    # The M7 fault listener has grpc_web_max_frame_size 1k while the backend
+    # advertises a 4096-byte native gRPC frame and sends no payload. Repeating
+    # the attack proves the declared length is rejected before scratch growth.
+    for _ in range(25):
+        consume_fault("oversized-frame")
+
+    time.sleep(0.2)
+    after = nginx_rss_kb()
+
+    assert after - before < 16 * 1024
+    assert_main_path_still_healthy()
+
+
+@pytest.mark.integration
+def test_truncated_native_frame_does_not_poison_worker_state():
+    for _ in range(10):
+        consume_fault("truncated-frame")
+
+    assert_main_path_still_healthy()
+
+
+@pytest.mark.integration
+def test_repeated_downstream_disconnects_do_not_accumulate_request_memory():
+    body = base64.b64encode(
+        encode_data_frame(
+            protobuf_string_field_1("cancel-stress")
+            + bytes([0x10, 0x64, 0x18, 0x14])  # count=100, delay_ms=20
+        )
+    )
+    before = nginx_rss_kb()
+
+    for _ in range(30):
+        try:
+            with httpx.stream(
+                "POST",
+                f"{MODULE}/grpcwebtest.TestService/Stream",
+                content=body,
+                headers=text_headers(),
+                timeout=3,
+            ) as response:
+                assert response.status_code == 200
+                iterator = response.iter_raw()
+                next(iterator, b"")
+                # Exiting the context closes downstream while the native RPC
+                # is still active, exercising request cleanup repeatedly.
+        except httpx.HTTPError:
+            pass
+
+    time.sleep(0.3)
+    after = nginx_rss_kb()
+
+    assert after - before < 16 * 1024
+    assert_main_path_still_healthy()
+
+
+@pytest.mark.integration
+def test_error_logs_do_not_leak_authorization_or_request_payload():
+    secret = "m7-secret-do-not-log-8af0d5d7"
+
+    response = httpx.post(
+        f"{MODULE}/grpcwebtest.TestService/Unary",
+        content=(b"%%%" + secret.encode()),
+        headers=text_headers(authorization=f"Bearer {secret}"),
+        timeout=5,
+    )
+    assert response.status_code == 400
+
+    logs = subprocess.check_output(
+        ["docker", "compose", "logs", "--no-color", "nginx"],
+        text=True,
+        timeout=10,
+        stderr=subprocess.STDOUT,
+    )
+    assert secret not in logs
