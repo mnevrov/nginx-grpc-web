@@ -27,6 +27,10 @@ if [[ ! "$REPEATS" =~ ^[1-9][0-9]*$ ]]; then
   echo "PERF_CONTROLLED_REPEATS must be a positive integer" >&2
   exit 2
 fi
+if [[ "$STRICT" == "1" && -n "${PERF_LOADGEN_CPUSET:-}" ]] && ! command -v taskset >/dev/null 2>&1; then
+  echo "strict controlled benchmark requires taskset for PERF_LOADGEN_CPUSET" >&2
+  exit 2
+fi
 
 mkdir -p "$OUTPUT_DIR"
 cp "$SLO" "$OUTPUT_DIR/slo.json"
@@ -51,6 +55,7 @@ data = {
     "build_cc": ${BUILD_CC@Q},
     "gateway_cpuset": os.environ.get("PERF_GATEWAY_CPUSET", ""),
     "backend_cpuset": os.environ.get("PERF_BACKEND_CPUSET", ""),
+    "loadgen_cpuset": os.environ.get("PERF_LOADGEN_CPUSET", ""),
     "capacity_steps": os.environ.get("PERF_CAPACITY_STEPS", "10,25,50,100,200,400"),
     "transport": os.environ.get("PERF_CAPACITY_TRANSPORT", "text"),
     "payload_bytes": int(os.environ.get("PERF_CAPACITY_PAYLOAD_BYTES", "4096")),
@@ -70,6 +75,7 @@ for i in $(seq 1 "$REPEATS"); do
     --output "$repeat_dir/host.json"
     --gateway-cpuset "${PERF_GATEWAY_CPUSET:-}"
     --backend-cpuset "${PERF_BACKEND_CPUSET:-}"
+    --loadgen-cpuset "${PERF_LOADGEN_CPUSET:-}"
   )
   if [[ "$STRICT" == "1" ]]; then
     host_args+=(--strict)
@@ -77,12 +83,21 @@ for i in $(seq 1 "$REPEATS"); do
   python3 "$ROOT/perf/host_info.py" "${host_args[@]}"
 
   echo "controlled repeat $i/$REPEATS frontend=$FRONTEND output=$repeat_dir"
-  NGINX_VERSION="$NGINX_VERSION" \
-  BUILD_CC="$BUILD_CC" \
-  PERF_FRONTEND="$FRONTEND" \
-  PERF_OUTPUT_DIR="$repeat_dir" \
-  PERF_CAPACITY_SLO="$SLO" \
-    bash "$ROOT/perf/run-ab.sh" capacity
+  if [[ -n "${PERF_LOADGEN_CPUSET:-}" ]]; then
+    NGINX_VERSION="$NGINX_VERSION" \
+    BUILD_CC="$BUILD_CC" \
+    PERF_FRONTEND="$FRONTEND" \
+    PERF_OUTPUT_DIR="$repeat_dir" \
+    PERF_CAPACITY_SLO="$SLO" \
+      taskset -c "$PERF_LOADGEN_CPUSET" bash "$ROOT/perf/run-ab.sh" capacity
+  else
+    NGINX_VERSION="$NGINX_VERSION" \
+    BUILD_CC="$BUILD_CC" \
+    PERF_FRONTEND="$FRONTEND" \
+    PERF_OUTPUT_DIR="$repeat_dir" \
+    PERF_CAPACITY_SLO="$SLO" \
+      bash "$ROOT/perf/run-ab.sh" capacity
+  fi
 
   if [[ "${PERF_CONTROLLED_PAUSE_SECONDS:-0}" != "0" ]]; then
     sleep "${PERF_CONTROLLED_PAUSE_SECONDS}"
