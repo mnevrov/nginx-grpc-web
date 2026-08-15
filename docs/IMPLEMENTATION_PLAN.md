@@ -167,6 +167,50 @@ browser -> LB / ingress -|
 
 This keeps rollback independent from the frontend and reduces it to routing weight change. Envoy should remain warm for an agreed rollback window after reaching 100% native traffic.
 
+## M9 — Server-streaming performance engine ✅
+
+- Go grpc-web load generator for concurrent server-side streams;
+- incremental text decoder supports independently padded Base64 blocks and arbitrary HTTP fragmentation;
+- binary grpc-web mode retained as Base64-cost diagnostic baseline;
+- deterministic backend can generate 1/4/8 MiB DATA without a matching multi-MiB request body;
+- benchmark-only backend-relative `server_elapsed_ns` timing captured immediately before response yield;
+- A/B topology keeps the same front NGINX version/worker count for both architectures;
+- legacy path disables proxy request/response buffering to avoid artificial disadvantage;
+- `typical`, `large` and `slow` profiles;
+- A/B/B/A ordering for measured sweeps;
+- cgroup v2 cumulative CPU sampling;
+- process `VmRSS` separated from `memory.current`;
+- JSON raw results and Markdown/JSON aggregation;
+- CI `perf-loadgen` protocol/unit gate and real `perf-smoke` topology gate;
+- shared GitHub runner explicitly treated as harness validation only.
+
+**Exit:** loadgen protocol gate and real A/B topology smoke green; both paths produce valid streams, resource samples and machine-readable reports without making an unsupported performance claim from shared-runner numbers.
+
+### M9 measurement finding
+
+The first resource sampler used `docker stats`, which produced no samples on very short CI runs. M9 replaced it with host-side cgroup v2 cumulative counters and explicit process RSS sampling. Report generation now fails when a measured run has fewer than two resource samples rather than publishing misleading zero CPU/RSS values.
+
+## M10 — Production-like TLS/HTTP2 performance path
+
+- identical TLS listeners are added to legacy/native front NGINX while preserving the existing cleartext HTTP/1.1 baseline;
+- NGINX enables HTTP/2 through `http2 on;` and the same TLS policy on both paths;
+- ephemeral benchmark CA/server certificate is generated locally and never committed;
+- CA private key is deleted after server certificate signing;
+- loadgen accepts a benchmark CA and optional TLS server-name override;
+- custom TLS transport explicitly attempts HTTP/2;
+- `tls-h2` runs require `response.ProtoMajor == 2`, TLS state and ALPN `h2`;
+- silent HTTP/1.1 fallback is a failed sample;
+- negotiated HTTP protocol, TLS version and ALPN are stored per stream;
+- `frontend` becomes part of report scenario identity so HTTP/1.1 and TLS/H2 samples cannot be aggregated together;
+- `perf-h2-smoke`, `perf-h2-typical`, `perf-h2-large`, `perf-h2-slow` mirror the existing profiles;
+- dedicated CI TLS/H2 topology gate validates every raw stream as HTTP/2 over TLS.
+
+**Exit:** strict TLS/H2 unit and topology gates green on exact PR head; HTTP/1.1 baseline remains green; existing module/browser/integration/hardening matrix is unchanged; no production module C behavior is modified.
+
+### M10 interpretation rule
+
+TLS/H2 results are a production-like transport baseline, not literal browser certification. Browser compatibility continues to come from the real React/`grpc-web` Playwright matrix. Performance conclusions must compare legacy/native within the same frontend mode and should be produced on controlled hardware with repeated A/B/B/A runs.
+
 ## PR discipline
 
 Один milestone может состоять из нескольких PR. Каждый PR должен оставлять репозиторий в объяснимом состоянии и не включать необязательные refactoring.

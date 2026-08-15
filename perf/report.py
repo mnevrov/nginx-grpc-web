@@ -73,6 +73,7 @@ def read_stats(path: Path) -> dict[str, float]:
 def scenario_key(data: dict) -> tuple:
     cfg = data["config"]
     return (
+        cfg.get("frontend", "http1"),
         cfg["transport"],
         int(cfg["payload_bytes"]),
         int(cfg["streams"]),
@@ -96,6 +97,9 @@ def aggregate(runs: list[dict]) -> dict:
     peak_rss_mib = 0.0
     peak_cgroup_memory_mib = 0.0
     stats_samples = 0
+    http_protocols: set[str] = set()
+    tls_alpn: set[str] = set()
+    tls_versions: set[str] = set()
 
     for item in runs:
         data = item["data"]
@@ -117,6 +121,12 @@ def aggregate(runs: list[dict]) -> dict:
         for stream in data.get("streams", []):
             if stream.get("error"):
                 continue
+            if stream.get("http_protocol"):
+                http_protocols.add(stream["http_protocol"])
+            if stream.get("tls_alpn"):
+                tls_alpn.add(stream["tls_alpn"])
+            if stream.get("tls_version"):
+                tls_versions.add(stream["tls_version"])
             ttfd.append(float(stream.get("ttfd_ms", 0.0)))
             durations.append(float(stream.get("duration_ms", 0.0)))
             added.extend(float(v) for v in stream.get("backend_to_client_ms", []))
@@ -142,6 +152,9 @@ def aggregate(runs: list[dict]) -> dict:
         "peak_rss_mib": peak_rss_mib,
         "peak_cgroup_memory_mib": peak_cgroup_memory_mib,
         "stats_samples": stats_samples,
+        "http_protocols": sorted(http_protocols),
+        "tls_alpn": sorted(tls_alpn),
+        "tls_versions": sorted(tls_versions),
     }
 
 
@@ -183,13 +196,14 @@ def main() -> None:
 
     rows = []
     for key in sorted(grouped):
-        transport, payload, streams, messages, delay, consumer_delay = key
+        frontend, transport, payload, streams, messages, delay, consumer_delay = key
         if "native" not in grouped[key] or "legacy" not in grouped[key]:
             continue
         legacy = aggregate(grouped[key]["legacy"])
         native = aggregate(grouped[key]["native"])
         rows.append(
             {
+                "frontend": frontend,
                 "transport": transport,
                 "payload_bytes": payload,
                 "streams": streams,
@@ -216,7 +230,7 @@ def main() -> None:
         )
 
     output = {
-        "version": 1,
+        "version": 2,
         "source": str(args.input),
         "comparison": "legacy NGINX -> Envoy vs native NGINX(module)",
         "rows": rows,
@@ -232,8 +246,8 @@ def main() -> None:
         "",
         "Negative delta is better for latency/CPU/RSS; positive delta is better for throughput.",
         "",
-        "| transport | payload | streams | p99 TTFD legacy/native | Δ | p99 backend→client legacy/native | Δ | MiB/s legacy/native | Δ | CPU core-s/GiB legacy/native | Δ | peak RSS MiB legacy/native | errors L/N |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| frontend | transport | payload | streams | p99 TTFD legacy/native | Δ | p99 backend→client legacy/native | Δ | MiB/s legacy/native | Δ | CPU core-s/GiB legacy/native | Δ | peak RSS MiB legacy/native | errors L/N |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
 
     for row in rows:
@@ -243,9 +257,10 @@ def main() -> None:
         payload = row["payload_bytes"]
         payload_label = f"{payload / MIB:.0f} MiB" if payload >= MIB else f"{payload / 1024:.0f} KiB"
         lines.append(
-            "| {transport} | {payload} | {streams} | {lttfd}/{nttfd} ms | {dttfd} | "
+            "| {frontend} | {transport} | {payload} | {streams} | {lttfd}/{nttfd} ms | {dttfd} | "
             "{ladd}/{nadd} ms | {dadd} | {lmb}/{nmb} | {dmb} | {lcpu}/{ncpu} | {dcpu} | "
             "{lrss}/{nrss} | {le}/{ne} |".format(
+                frontend=row["frontend"],
                 transport=row["transport"],
                 payload=payload_label,
                 streams=row["streams"],
@@ -278,6 +293,8 @@ def main() -> None:
             "Gateway CPU is measured from cgroup v2 cumulative `usage_usec` before/through/after each measured run. Legacy CPU is the sum of front NGINX + Envoy; native CPU is the NGINX(module) cgroup.",
             "",
             "Peak RSS is the maximum sampled sum of process `VmRSS` for all PIDs in the relevant container cgroups. `report.json` additionally records `peak_cgroup_memory_mib` from `memory.current`, which includes cache and other cgroup-charged memory and is intentionally not labelled RSS.",
+            "",
+            "For `frontend=tls-h2`, the load generator requires HTTPS, validates the benchmark CA, requires response HTTP/2 and ALPN `h2`, and records negotiated HTTP/TLS metadata per stream. A silent HTTP/1.1 fallback is therefore a failed run, not a benchmark sample.",
             "",
             "Use a dedicated host and longer A/B/B/A measurement windows for release-quality CPU/GiB and latency conclusions. The GitHub Actions smoke result validates the harness only.",
             "",

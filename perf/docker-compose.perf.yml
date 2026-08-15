@@ -22,8 +22,10 @@ services:
       - backend
     volumes:
       - ./nginx-native.conf:/etc/nginx/nginx.conf:ro
+      - ./.certs:/etc/nginx/perf-tls:ro
     ports:
       - "19080:8080"
+      - "19443:8443"
 
   legacy-nginx:
     image: "nginx:${NGINX_VERSION:-1.30.4}"
@@ -31,5 +33,7 @@ services:
       - envoy
     volumes:
       - ./nginx-legacy.conf:/etc/nginx/nginx.conf:ro
+      - ./.certs:/etc/nginx/perf-tls:ro
     ports:
       - "19081:8080"
+      - "19444:8443"

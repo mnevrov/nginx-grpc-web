@@ -1,4 +1,4 @@
-# M9 performance suite
+# M9/M10 performance suite
 
 Этот каталог предназначен для количественного сравнения **server-side gRPC-Web streaming**:
 
@@ -9,37 +9,67 @@ native: loadgen -> NGINX + ngx_http_grpc_web_module -> native gRPC backend
 
 Perf suite не заменяет `tests/protocol`: correctness остаётся отдельным gate, а здесь измеряются latency/capacity/CPU/RSS.
 
-## Быстрый smoke
+## Frontend modes
 
-```bash
-make perf-smoke
+Доступны два контролируемых downstream режима:
+
+```text
+http1   loadgen -> cleartext HTTP/1.1 -> front NGINX
+tls-h2  loadgen -> TLS + ALPN h2 -> HTTP/2 -> front NGINX
 ```
 
-Smoke поднимает оба gateway path, выполняет короткий text-mode stream и создаёт raw JSON + Markdown report. CI запускает этот режим только для проверки работоспособности benchmark harness. **Цифры GitHub-hosted runner нельзя использовать как итоговый benchmark.**
+Для `tls-h2` runner генерирует эфемерный CA/server certificate в `perf/.certs/`, использует один и тот же сертификат для legacy/native и требует от каждого measured stream:
+
+- успешную проверку benchmark CA;
+- HTTPS;
+- `response.ProtoMajor == 2`;
+- ALPN `h2`;
+- TLS 1.2 или TLS 1.3.
+
+Silent fallback на HTTP/1.1 считается ошибкой benchmark, а не допустимым sample. NGINX TLS listener использует `http2 on;`, то есть современную server-level директиву HTTP/2. CA private key удаляется сразу после подписи server certificate.
+
+## Быстрые smoke gates
+
+```bash
+make perf-smoke      # HTTP/1.1 baseline
+make perf-h2-smoke   # TLS/HTTP2 strict baseline
+```
+
+Оба smoke поднимают legacy/native gateway paths и создают raw JSON + Markdown report. CI запускает их только для проверки benchmark harness. **Цифры GitHub-hosted runner нельзя использовать как итоговый benchmark.**
 
 ## Основные профили
 
+HTTP/1.1:
+
 ```bash
-make perf-typical   # 4 KiB, concurrency staircase
-make perf-large     # 1/4/8 MiB, text + binary, concurrency 1/4/16
-make perf-slow      # slow consumer/backpressure
+make perf-typical
+make perf-large
+make perf-slow
+```
+
+TLS/HTTP2:
+
+```bash
+make perf-h2-typical
+make perf-h2-large
+make perf-h2-slow
 ```
 
 Результаты по умолчанию сохраняются в:
 
 ```text
-perf/results/<UTC timestamp>/
+perf/results/<UTC timestamp>-<frontend>/
 ```
 
 Можно указать каталог явно:
 
 ```bash
-PERF_OUTPUT_DIR=/data/bench/run-001 make perf-large
+PERF_OUTPUT_DIR=/data/bench/h2-large-001 make perf-h2-large
 ```
 
 ## Large payload
 
-`perf-large` выполняет A/B/B/A для каждой точки:
+`perf-large` и `perf-h2-large` выполняют A/B/B/A для каждой точки:
 
 ```text
 transport: grpc-web-text, grpc-web binary
@@ -56,6 +86,9 @@ Binary mode нужен как diagnostic baseline: разница `text - binary
 
 Go loadgen сохраняет:
 
+- frontend mode;
+- negotiated HTTP protocol;
+- TLS version и ALPN для HTTPS;
 - response-header latency;
 - TTFD до первого **полностью декодированного DATA frame**;
 - inter-DATA arrival intervals;
@@ -95,11 +128,11 @@ CPU core-seconds = Σ(last usage_usec - first usage_usec) / 1_000_000
 CPU core-seconds / GiB = core-seconds / useful payload GiB
 ```
 
-Для legacy CPU и memory метрики суммируются по front NGINX + Envoy. **Peak RSS** — максимальная во времени сумма process `VmRSS`; это та же семантика RSS, которая используется в lifecycle regression tests проекта. `memory.current` хранится отдельно как `peak_cgroup_memory_mib`, потому что включает page cache и другую память, списанную на cgroup, и не должна называться RSS.
+Для legacy CPU и memory метрики суммируются по front NGINX + Envoy. **Peak RSS** — максимальная во времени сумма process `VmRSS`. `memory.current` хранится отдельно как `peak_cgroup_memory_mib`, потому что включает page cache и другую память, списанную на cgroup, и не должна называться RSS.
 
 Каждый measured run обязан иметь минимум два cgroup sample; иначе report завершается ошибкой вместо публикации нулевых CPU/RSS.
 
-Требование perf host: Linux cgroup v2 с доступным `/proc/<container-pid>/cgroup` и `/sys/fs/cgroup`. Обычные современные Docker hosts, включая текущий Ubuntu GitHub runner, этому соответствуют.
+Требование perf host: Linux cgroup v2 с доступным `/proc/<container-pid>/cgroup` и `/sys/fs/cgroup`.
 
 ## Fair benchmark rules
 
@@ -109,12 +142,13 @@ CPU core-seconds / GiB = core-seconds / useful payload GiB
 2. либо закрепить процессы/containers на разных CPU sets;
 3. использовать одинаковый NGINX version и worker count;
 4. одинаково задать сетевой путь, TLS mode и MTU;
-5. делать warmup и минимум 5 повторов;
-6. чередовать A/B/B/A или randomize order;
-7. сохранять raw JSON до любой агрегации;
-8. отдельно следить, чтобы load generator CPU не стал bottleneck.
+5. сравнивать legacy/native внутри **одного frontend mode**;
+6. делать warmup и минимум 5 повторов;
+7. чередовать A/B/B/A или randomize order;
+8. сохранять raw JSON до любой агрегации;
+9. отдельно следить, чтобы load generator CPU не стал bottleneck.
 
-Автоматический runner сначала прогревает оба gateway path маленьким discarded stream, затем начинает measured A/B runs. Cgroup sampler обязан записать baseline до старта loadgen и финальный sample после его завершения.
+Автоматический runner сначала прогревает оба gateway path маленьким discarded stream, затем начинает measured A/B runs. Для `tls-h2` этот warmup также проверяет CA/ALPN/HTTP2 до первого measured sample. Cgroup sampler обязан записать baseline до старта loadgen и финальный sample после его завершения.
 
 ### CPU budget
 
@@ -125,11 +159,21 @@ CPU core-seconds / GiB = core-seconds / useful payload GiB
 
 Их нельзя смешивать в одной итоговой capacity цифре.
 
-## Downstream HTTP version
+## TLS/H2 interpretation
 
-Текущий автоматизированный perf topology использует cleartext HTTP/1.1 между Go loadgen и front NGINX. Это намеренный первый controlled baseline для стоимости grpc-web filter/proxy path.
+TLS/H2 profile добавляет реальные TLS record/crypto и HTTP/2 framing/multiplexing costs на участке loadgen → front NGINX. Он не меняет upstream архитектуру:
 
-Production React обычно приходит через TLS/HTTP/2. TLS/H2 нужно прогонять отдельной topology variant перед финальным production capacity claim; нельзя выдавать HTTP/1.1 result за полную browser/TLS capacity certification.
+```text
+native: front NGINX --native HTTP/2 gRPC--> backend
+legacy: front NGINX --HTTP/1.1--> Envoy --native HTTP/2 gRPC--> backend
+```
+
+Поэтому для production решения нужны как минимум две группы результатов:
+
+1. `http1` — controlled proxy/filter baseline;
+2. `tls-h2` — browser-like transport baseline.
+
+TLS/H2 Go loadgen всё ещё не является literal browser certification. Browser compatibility остаётся отдельным Playwright gate на Chromium/Firefox/WebKit.
 
 ## Файлы
 
@@ -137,10 +181,12 @@ Production React обычно приходит через TLS/HTTP/2. TLS/H2 н�
 perf/
 ├── docker-compose.perf.yml
 ├── envoy.yaml
+├── generate-tls.sh
 ├── nginx-legacy.conf
 ├── nginx-native.conf
 ├── loadgen/
 │   ├── go.mod
+│   ├── http_transport.go
 │   ├── main.go
 │   ├── main_test.go
 │   └── protocol.go
@@ -161,6 +207,8 @@ perf/
 report.json  aggregated machine-readable comparison
 report.md    human-readable A/B table
 ```
+
+`frontend` является частью scenario key, поэтому результаты `http1` и `tls-h2` не смешиваются даже при использовании общего output directory. `report.json` дополнительно сохраняет наблюдаемые `http_protocols`, `tls_alpn` и `tls_versions`.
 
 Основные decision metrics:
 

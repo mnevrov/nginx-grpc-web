@@ -52,6 +52,45 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+  perf-h2-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NGINX_VERSION: "1.30.4"
+      BUILD_CC: gcc
+      PERF_OUTPUT_DIR: /tmp/perf-h2-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - run: make perf-h2-smoke
+      - run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/perf-h2-smoke')
+          raw = [p for p in root.glob('*.json') if p.name != 'report.json']
+          assert raw, 'no raw TLS/H2 benchmark results'
+          for path in raw:
+              data = json.loads(path.read_text())
+              assert data['config']['frontend'] == 'tls-h2', path
+              assert data['config']['require_http2'] is True, path
+              assert data['summary']['errors'] == 0, path
+              for stream in data['streams']:
+                  assert stream['http_protocol'] == 'HTTP/2.0', (path, stream)
+                  assert stream['tls_alpn'] == 'h2', (path, stream)
+                  assert stream['tls_version'] in {'TLS1.2', 'TLS1.3'}, (path, stream)
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-h2-smoke-results
+          path: /tmp/perf-h2-smoke/
+          if-no-files-found: warn
+          retention-days: 3
+
   hardening:
     runs-on: ubuntu-latest
     steps:
