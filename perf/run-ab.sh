@@ -43,6 +43,22 @@ for url in http://127.0.0.1:19080/ http://127.0.0.1:19081/; do
   fi
 done
 
+# Warm both gateway paths and the common backend before any measured run.
+# The warmup is deliberately discarded: it primes process/runtime state without
+# contaminating result aggregation or Docker CPU/RSS samples.
+for warm_url in http://127.0.0.1:19080 http://127.0.0.1:19081; do
+  "$LOADGEN" \
+    -name warmup \
+    -url "$warm_url" \
+    -transport text \
+    -streams "${PERF_WARMUP_STREAMS:-4}" \
+    -messages "${PERF_WARMUP_MESSAGES:-5}" \
+    -delay-ms 10 \
+    -payload-bytes 4096 \
+    -timeout 30 \
+    >/dev/null
+done
+
 case_index=0
 run_one() {
   local arch=$1
