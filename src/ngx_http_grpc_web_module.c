@@ -55,6 +55,8 @@ static ngx_int_t ngx_http_grpc_web_ensure_te(ngx_http_request_t *r);
 static ngx_flag_t ngx_http_grpc_web_accepts_text(ngx_http_request_t *r);
 static ngx_flag_t ngx_http_grpc_web_is_native_grpc_response(
     ngx_http_request_t *r);
+static ngx_flag_t ngx_http_grpc_web_has_response_header(
+    ngx_http_request_t *r, const char *name, size_t len);
 static ngx_int_t ngx_http_grpc_web_decode_text_request(
     ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
     ngx_chain_t *in, ngx_chain_t **out);
@@ -216,6 +218,39 @@ ngx_http_grpc_web_is_native_grpc_response(ngx_http_request_t *r)
     return ngx_strncasecmp(ct.data,
                            (u_char *) "application/grpc",
                            sizeof("application/grpc") - 1) == 0;
+}
+
+static ngx_flag_t
+ngx_http_grpc_web_has_response_header(ngx_http_request_t *r,
+    const char *name, size_t len)
+{
+    ngx_uint_t i;
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h;
+
+    part = &r->headers_out.headers.part;
+    h = part->elts;
+
+    for (i = 0; /* void */; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (h[i].hash == 0 || h[i].key.len != len) {
+            continue;
+        }
+
+        if (ngx_strncasecmp(h[i].key.data, (u_char *) name, len) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 static ngx_int_t
@@ -469,6 +504,7 @@ ngx_http_grpc_web_request_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 static ngx_int_t
 ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
 {
+    ngx_flag_t trailers_only;
     ngx_http_grpc_web_ctx_t *ctx;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_grpc_web_module);
@@ -482,6 +518,9 @@ ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
     }
 
     ctx->transform_response = 1;
+    trailers_only = (r->headers_out.content_length_n == 0
+        && ngx_http_grpc_web_has_response_header(
+            r, "grpc-status", sizeof("grpc-status") - 1));
 
     if (ctx->text_response) {
         ngx_str_set(&r->headers_out.content_type,
@@ -494,6 +533,20 @@ ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
     r->headers_out.content_type_len = r->headers_out.content_type.len;
     r->headers_out.content_type_lowcase = NULL;
     r->headers_out.content_type_hash = 0;
+
+    if (trailers_only) {
+        /*
+         * ngx_http_grpc_module represents an upstream HEADERS+END_STREAM
+         * response as ordinary response headers.  In this form grpc-status
+         * and grpc-message are already browser-visible and there is no native
+         * trailer list from which to synthesize a 0x80 body frame.  Envoy also
+         * permits this trailers-only wire shape, so leave the empty body and
+         * status headers intact after rewriting only the media type.
+         */
+        ctx->trailers_sent = 1;
+        r->expect_trailers = 0;
+        return ngx_http_grpc_web_next_header_filter(r);
+    }
 
     if (r->headers_out.content_length != NULL) {
         r->headers_out.content_length->hash = 0;
