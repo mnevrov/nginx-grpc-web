@@ -157,6 +157,10 @@ export function openStream(baseUrl, options = {}) {
     metadata["grpc-timeout"] = options.grpcTimeout;
   }
 
+  if (options.faultMode) {
+    metadata["x-fault-mode"] = options.faultMode;
+  }
+
   return client.serverStreaming(
     `${baseUrl}/grpcwebtest.TestService/Stream`,
     request,
