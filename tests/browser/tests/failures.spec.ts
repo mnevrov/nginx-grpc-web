@@ -19,12 +19,18 @@ async function run(page: Page, endpoint: string, options: Record<string, string>
   const query = new URLSearchParams({ endpoint, ...options });
   await page.goto(`/?${query.toString()}`);
 
-  await expect
-    .poll(
-      () => page.evaluate(() => (window as any).__grpcWebHarness?.status),
-      { timeout: 5_000 },
-    )
-    .not.toBe("running");
+  try {
+    await expect
+      .poll(
+        () => page.evaluate(() => (window as any).__grpcWebHarness?.status),
+        { timeout: 5_000 },
+      )
+      .not.toBe("running");
+  } catch (err) {
+    const snapshot = await page.evaluate(() => (window as any).__grpcWebHarness);
+    console.log("grpc-web harness timeout snapshot:", JSON.stringify(snapshot));
+    throw err;
+  }
 
   return page.evaluate(() => (window as any).__grpcWebHarness);
 }
