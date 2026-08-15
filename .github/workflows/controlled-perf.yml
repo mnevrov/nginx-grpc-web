@@ -1,0 +1,75 @@
+name: controlled-perf
+
+on:
+  pull_request:
+    paths:
+      - "perf/**"
+      - ".github/workflows/controlled-perf.yml"
+      - "Makefile"
+      - "docs/**"
+      - "README.md"
+  workflow_dispatch:
+
+concurrency:
+  group: controlled-perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 perf/test_host_info.py -q
+      - run: python3 perf/test_decision.py -q
+
+  controlled-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      NGINX_VERSION: "1.30.4"
+      BUILD_CC: gcc
+      PERF_FRONTEND: tls-h2
+      PERF_CONTROLLED_REPEATS: "2"
+      PERF_CONTROLLED_STRICT: "0"
+      PERF_CONTROLLED_OUTPUT_DIR: /tmp/perf-controlled-smoke
+      PERF_DECISION_POLICY: perf/scenarios/decision-smoke.json
+      PERF_CAPACITY_SLO: perf/scenarios/capacity-smoke-slo.json
+      PERF_CAPACITY_STEPS: "1,2"
+      PERF_CAPACITY_MESSAGES: "2"
+      PERF_CAPACITY_DELAY_MS: "5"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - run: bash ./perf/run-controlled.sh
+      - run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/perf-controlled-smoke')
+          decision = json.loads((root / 'decision.json').read_text())
+          assert decision['repeats'] == 2, decision
+          assert decision['evidence_class'] == 'harness_only', decision
+          assert decision['recommendation'] == 'inconclusive', decision
+          assert 'harness_only' in decision['decision_reasons'], decision
+          fingerprints = set()
+          for repeat in sorted(root.glob('repeat-*')):
+              host = json.loads((repeat / 'host.json').read_text())
+              capacity = json.loads((repeat / 'capacity.json').read_text())
+              fingerprints.add(host['fingerprint'])
+              assert capacity['scenario']['frontend'] == 'tls-h2', capacity
+              assert capacity['scenario']['transport'] == 'text', capacity
+          assert len(fingerprints) == 1, fingerprints
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: controlled-perf-smoke-results
+          path: /tmp/perf-controlled-smoke/
+          if-no-files-found: warn
+          retention-days: 3
