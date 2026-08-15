@@ -3,32 +3,34 @@
 ## Source and scope
 
 - [ ] release commit находится в `main`;
-- [ ] `README.md`, `docs/PROTOCOL_CONTRACT.md`, `docs/COMPATIBILITY.md` и `docs/DEPLOYMENT.md` соответствуют коду;
-- [ ] scope v0.1 не расширен на client streaming, bidi, JSON, CORS/auth/routing;
-- [ ] нет незакоммиченных/generated build artifacts в source tree.
+- [x] `README.md`, `docs/PROTOCOL_CONTRACT.md`, `docs/COMPATIBILITY.md` и `docs/DEPLOYMENT.md` соответствуют коду;
+- [x] scope v0.1 не расширен на client streaming, bidi, JSON, CORS/auth/routing;
+- [x] нет generated build artifacts в source tree.
 
 ## Compatibility CI
 
-- [ ] NGINX stable 1.30.4 + GCC build/load smoke green;
-- [ ] NGINX stable 1.30.4 + Clang build/load smoke green;
-- [ ] NGINX mainline 1.31.3 + GCC build/load smoke green;
-- [ ] NGINX mainline 1.31.3 + Clang build/load smoke green;
-- [ ] full protocol/hardening/differential suite green на 1.30.4;
-- [ ] full protocol/hardening/differential suite green на 1.31.3;
-- [ ] Chromium browser suite green;
-- [ ] Firefox browser suite green;
-- [ ] WebKit browser suite green;
-- [ ] ASAN/UBSAN green;
-- [ ] Base64/frame fuzz smoke green.
+Подтверждено post-merge `main` run #76 (`31888310660`) на commit `82729f5f3e026df820b01cfb5a9d2d36a7f31d85`.
+
+- [x] NGINX stable 1.30.4 + GCC build/load smoke green;
+- [x] NGINX stable 1.30.4 + Clang build/load smoke green;
+- [x] NGINX mainline 1.31.3 + GCC build/load smoke green;
+- [x] NGINX mainline 1.31.3 + Clang build/load smoke green;
+- [x] full protocol/hardening/differential suite green на 1.30.4;
+- [x] full protocol/hardening/differential suite green на 1.31.3;
+- [x] Chromium browser suite green;
+- [x] Firefox browser suite green;
+- [x] WebKit browser suite green;
+- [x] ASAN/UBSAN green;
+- [x] Base64/frame fuzz smoke green.
 
 ## Security / hardening
 
-- [ ] exact media-type activation regression green;
-- [ ] malformed/incomplete Base64 regression green;
-- [ ] oversized/truncated frame regressions green;
-- [ ] missing native trailers cannot produce false success;
-- [ ] repeated cancellation/reset RSS gates green;
-- [ ] payload/Authorization secret logging regression green.
+- [x] exact media-type activation regression green;
+- [x] malformed/incomplete Base64 regression green;
+- [x] oversized/truncated frame regressions green;
+- [x] missing native trailers cannot produce false success;
+- [x] repeated cancellation/reset RSS gates green;
+- [x] payload/Authorization secret logging regression green.
 
 ## Artifact
 
@@ -66,7 +68,9 @@ make package-module NGINX_VERSION=1.30.4 BUILD_CC=gcc
 v0.1.0
 ```
 
-Tag должен указывать на exact green commit после merge M8.
+M8 code baseline подтверждён зелёным post-merge CI на `82729f5f3e026df820b01cfb5a9d2d36a7f31d85`.
+
+После merge release-prep PR тег должен указывать на resulting `main` commit только после зелёного post-merge CI этого commit. Release metadata входит в tag, поэтому тег не ставится на более ранний commit.
 
 ## Pre-production acceptance
 
@@ -96,7 +100,7 @@ Tag должен указывать на exact green commit после merge M8.
 
 ## Post-release
 
-- [ ] сохранить CI run URL/ID в release notes;
+- [ ] сохранить final release CI run URL/ID в release notes;
 - [ ] сохранить checksums published artifacts;
 - [ ] зафиксировать NGINX compatibility matrix датой;
 - [ ] при новом stable/mainline NGINX обновлять matrix отдельным compatibility PR;
