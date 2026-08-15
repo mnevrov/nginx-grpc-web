@@ -45,7 +45,7 @@ done
 
 # Warm both gateway paths and the common backend before any measured run.
 # The warmup is deliberately discarded: it primes process/runtime state without
-# contaminating result aggregation or Docker CPU/RSS samples.
+# contaminating result aggregation or cgroup CPU/RSS samples.
 for warm_url in http://127.0.0.1:19080 http://127.0.0.1:19081; do
   "$LOADGEN" \
     -name warmup \
@@ -95,7 +95,27 @@ run_one() {
 
   bash "$ROOT/perf/sample-stats.sh" "$COMPOSE" "$stats" "${services[@]}" &
   local sampler=$!
-  sleep 0.5
+
+  # Do not start the measured request until the sampler has produced its first
+  # baseline row. This makes cumulative CPU deltas deterministic even for a
+  # very short CI smoke run.
+  local stats_ready=0
+  for _ in $(seq 1 50); do
+    if ! kill -0 "$sampler" >/dev/null 2>&1; then
+      break
+    fi
+    if [[ -f "$stats" ]] && [[ $(wc -l < "$stats") -gt 1 ]]; then
+      stats_ready=1
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "$stats_ready" != "1" ]]; then
+    kill "$sampler" >/dev/null 2>&1 || true
+    wait "$sampler" >/dev/null 2>&1 || true
+    echo "gateway sampler did not produce a baseline: $stem" >&2
+    return 1
+  fi
 
   set +e
   "$LOADGEN" \
@@ -112,6 +132,10 @@ run_one() {
   local rc=$?
   set -e
 
+  # Let the sampler observe a post-run cumulative CPU value and final memory
+  # point before termination. The small idle tail has negligible CPU cost but
+  # prevents short runs from collapsing to one sample.
+  sleep "${PERF_STATS_SETTLE:-0.15}"
   kill "$sampler" >/dev/null 2>&1 || true
   wait "$sampler" >/dev/null 2>&1 || true
 
