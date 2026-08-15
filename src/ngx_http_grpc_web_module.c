@@ -636,6 +636,7 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
     ngx_http_grpc_web_ctx_t *ctx, ngx_chain_t *in, ngx_chain_t **out)
 {
     size_t n, src_len, frame_size;
+    uint64_t frame_size64;
     u_char *src;
     ngx_buf_t *b;
     ngx_chain_t *cl, *encoded, *trailers, **ll;
@@ -679,14 +680,13 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
                     return NGX_ERROR;
                 }
 
-                if ((size_t) ctx->response_frame.length
-                    > NGX_MAX_SIZE_T_VALUE - GRPC_WEB_FRAME_HEADER_SIZE)
-                {
+                frame_size64 = (uint64_t) GRPC_WEB_FRAME_HEADER_SIZE
+                             + (uint64_t) ctx->response_frame.length;
+                if (frame_size64 > (uint64_t) NGX_MAX_SIZE_T_VALUE) {
                     return NGX_ERROR;
                 }
 
-                frame_size = GRPC_WEB_FRAME_HEADER_SIZE
-                           + (size_t) ctx->response_frame.length;
+                frame_size = (size_t) frame_size64;
                 ctx->response_frame_buf = ngx_create_temp_buf(r->pool, frame_size);
                 if (ctx->response_frame_buf == NULL) {
                     return NGX_ERROR;
