@@ -73,26 +73,45 @@ M5 fixes the lifetime model rather than weakening the test:
 - a 480-frame stress stream is required to stay under a `<32 MiB` peak RSS delta gate;
 - slow-consumer and wire-semantics tests run together with the RSS regression.
 
-## M6 — Cancellation and failures
+## M6 — Cancellation and failures ✅
 
-- browser cancel;
-- backend reset;
-- backend unavailable;
-- upstream timeout/deadline;
-- trailers-only;
-- empty stream;
-- mid-stream failure after one or more DATA frames.
+- clean empty stream;
+- application-level mid-stream gRPC abort after one or more DATA frames;
+- `grpc-timeout` / `DEADLINE_EXCEEDED`;
+- browser `cancel()` / downstream disconnect propagated to native upstream RPC;
+- dead upstream / connect failure;
+- proxy-side read timeout before first DATA;
+- local NGINX `502/503` normalized to terminal `UNAVAILABLE (14)` for grpc-web requests;
+- local NGINX `504/408` normalized to terminal `DEADLINE_EXCEEDED (4)` for grpc-web requests;
+- standard NGINX HTML error body removed from normalized grpc-web local errors;
+- synthetic local-error response validated as `HTTP 200 + grpc-web content-type + one terminal trailer frame`;
+- observable React error codes compared with Envoy;
+- browser harness records synchronous `data/error/status/end` event trace so terminal semantics are not hidden by React batching.
 
-**Exit:** failure matrix green and observable React behavior matches Envoy semantics where applicable.
+**Exit:** protocol/wire/browser failure matrix green; existing React `grpc-web` client observes matching Envoy status semantics for the covered gateway failures.
+
+### M6 implementation finding
+
+The test-first pass showed that empty streams, application gRPC aborts, deadlines and cancellation already worked through stock `ngx_http_grpc_module`; no production-module change was needed for those paths.
+
+The actual compatibility gap was local NGINX gateway errors. A dead upstream produced ordinary HTML `502`, and a proxy read timeout produced HTML `504`; the browser `grpc-web` client mapped both to `UNKNOWN (2)`. M6 introduces a deliberately narrow local-error adapter only after the request has already been recognized as grpc-web.
+
+The application mid-stream test uses a valid gRPC terminal status (`context.abort()`), not a raw transport failure. HTTP/2 `RST_STREAM` / TCP reset after DATA remains a separate M7 fault-injection case.
 
 ## M7 — Hardening
 
-- size limits;
-- overflow guards;
-- malformed fuzz corpus;
-- ASAN/UBSAN;
-- leak checks;
-- logging review.
+- raw HTTP/2 `RST_STREAM` / TCP reset fault injection before and after DATA;
+- size-limit boundary tests for request, DATA frame and trailer block;
+- integer overflow/underflow review and boundary corpus;
+- malformed gRPC frame corpus;
+- malformed/incomplete Base64 fuzz corpus;
+- ASAN/UBSAN builds and tests;
+- long-stream/leak/lifecycle checks beyond RSS smoke;
+- cancellation/backpressure stress under repeated requests;
+- logging review: useful diagnostics without request metadata/payload leakage;
+- configuration misuse tests and safe failure behavior.
+
+**Exit:** sanitizer/fuzz/fault-injection suite green and no known unbounded memory, parser-safety or transport-reset defects remain in supported scope.
 
 ## M8 — Compatibility
 
