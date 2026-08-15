@@ -9,8 +9,8 @@ help:
 	  'make reference-up    - backend + Envoy oracle' \
 	  'make module-up       - backend + NGINX module' \
 	  'make test-reference  - Envoy integration baseline' \
-	  'make test-module     - NGINX M2 binary unary integration test' \
-	  'make test-diff       - Envoy vs NGINX M2 differential test' \
+	  'make test-module     - NGINX implemented module integration tests' \
+	  'make test-diff       - Envoy vs NGINX implemented differential tests' \
 	  'make test-browser    - browser grpc-web tests' \
 	  'make down            - stop test stack'
 
@@ -40,10 +40,16 @@ test-reference:
 	python3 -m pytest -q -m integration tests/protocol/test_reference_smoke.py
 
 test-module:
-	python3 -m pytest -q -m integration tests/protocol/test_module_binary.py::test_nginx_binary_unary
+	python3 -m pytest -q -m integration \
+	  tests/protocol/test_module_binary.py::test_nginx_binary_unary \
+	  tests/protocol/test_module_text_request.py::test_nginx_text_unary_fixed_content_length_decodes_request \
+	  tests/protocol/test_module_text_request.py::test_nginx_text_unary_chunked_fragmentation \
+	  tests/protocol/test_module_text_request.py::test_nginx_rejects_malformed_text_request
 
 test-diff:
-	python3 -m pytest -q -m integration tests/protocol/test_module_binary.py::test_nginx_binary_unary_matches_envoy
+	python3 -m pytest -q -m integration \
+	  tests/protocol/test_module_binary.py::test_nginx_binary_unary_matches_envoy \
+	  tests/protocol/test_module_text_request.py::test_nginx_text_request_semantics_match_envoy
 
 test-browser:
 	cd tests/browser && npm test

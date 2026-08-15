@@ -69,6 +69,8 @@ Envoy используется в тестовом стенде как **referen
 | client streaming | вне scope |
 | bidi streaming | вне scope |
 
+Таблица выше описывает целевой scope `v0.1`, а не текущую milestone-готовность. Актуальное состояние реализации приведено ниже.
+
 ## Быстрый старт
 
 Требования:
@@ -83,13 +85,13 @@ make reference-up
 make test-reference
 ```
 
-Для реализованного binary unary path:
+Для уже реализованных M2/M3 путей:
 
 ```bash
 # backend + NGINX module
 make module-up
 
-# NGINX binary unary integration
+# binary unary + grpc-web-text request-side integration
 make test-module
 
 # canonical Envoy ↔ NGINX comparison
@@ -97,7 +99,8 @@ make test-module
 make reference-up
 make test-diff
 
-# real Chromium + React grpc-web client
+# browser regression: M2 binary path + Envoy text reference;
+# NGINX text-mode browser path включается в M4
 make test-browser
 ```
 
@@ -140,7 +143,9 @@ Envoy считается reference implementation для наблюдаемог�
 
 ## Текущее состояние
 
-M0/M1 завершены. M2 реализует binary unary path:
+M0/M1 завершены.
+
+M2 реализует binary unary path:
 
 - gRPC-Web binary request headers нормализуются для native `ngx_http_grpc_module`;
 - binary request/response DATA framing проходит без protobuf parsing;
@@ -148,4 +153,13 @@ M0/M1 завершены. M2 реализует binary unary path:
 - NGINX и Envoy сравниваются canonical differential test;
 - тот же React `grpc-web` binary client проверяется через Playwright против обоих gateway.
 
-`grpc-web-text` request decoding остаётся отдельным M3: incremental Base64 state machine не смешивается с binary path.
+M3 реализует request-side `grpc-web-text`:
+
+- Base64 декодируется statefully между произвольными request-body buffers;
+- fixed `Content-Length` и chunked downstream requests поддерживаются отдельно;
+- encoded downstream `Content-Length` не уходит в native gRPC upstream как decoded length;
+- отдельный zero-length terminal callback передаётся как NGINX special control buffer, а не как пустой temporary data buffer;
+- malformed/incomplete Base64 отклоняется с `400`;
+- fragmentation и request semantics сверяются с Envoy.
+
+Полноценный `grpc-web-text` unary end-to-end пока **не считается реализованным**: M4 должен добавить response-side Base64 encoding и text trailer frame, после чего тот же React-клиент будет включён против NGINX text endpoint.
