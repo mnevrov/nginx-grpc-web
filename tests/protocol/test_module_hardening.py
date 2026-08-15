@@ -106,8 +106,9 @@ def consume_fault(mode: str) -> None:
         pass
 
 
-def observe_first_fault_data(mode: str) -> bytes:
+def observe_fault_frames(mode: str) -> list:
     timeout = httpx.Timeout(2.0, read=0.35)
+    observed = []
 
     with httpx.stream(
         "POST",
@@ -124,20 +125,20 @@ def observe_first_fault_data(mode: str) -> bytes:
         frames = iter_text_frames(response.iter_raw())
         first = next(frames)
         assert not first.is_trailer
+        observed.append(first)
 
-        # Let the injected RST_STREAM/TCP reset become observable upstream,
-        # then attempt to advance once. Envoy itself may leave the browser RPC
-        # open after an after-DATA reset, so EOF, protocol error and a bounded
-        # read timeout are all legitimate transport outcomes here. The hard
-        # invariants are preservation of the completed DATA frame and healthy,
-        # bounded NGINX lifecycle after the fault.
+        # Let the injected RST_STREAM/TCP reset/EOF become observable upstream,
+        # then drain only a small bounded number of semantic frames. Envoy may
+        # leave the browser RPC open after an after-DATA reset, so EOF, protocol
+        # error and a bounded read timeout are all legitimate transport shapes.
         time.sleep(0.05)
         try:
-            next(frames)
+            while len(observed) < 3:
+                observed.append(next(frames))
         except (StopIteration, httpx.HTTPError, ValueError):
             pass
 
-        return first.payload
+    return observed
 
 
 def assert_main_path_still_healthy() -> None:
@@ -215,10 +216,23 @@ def test_truncated_native_frame_does_not_poison_worker_state():
 @pytest.mark.integration
 @pytest.mark.parametrize("mode", ["rst-after-data", "tcp-reset-after-data"])
 def test_after_data_transport_fault_preserves_completed_data(mode: str):
-    payload = observe_first_fault_data(mode)
+    frames = observe_fault_frames(mode)
     expected = protobuf_string_field_1("before-transport-fault") + bytes([0x10, 0x01])
 
-    assert payload == expected
+    assert frames[0].payload == expected
+    assert_main_path_still_healthy()
+
+
+@pytest.mark.integration
+def test_missing_native_trailers_never_become_false_grpc_success():
+    frames = observe_fault_frames("clean-without-trailers")
+    expected = protobuf_string_field_1("before-transport-fault") + bytes([0x10, 0x01])
+
+    assert frames[0].payload == expected
+    for frame in frames[1:]:
+        if frame.is_trailer:
+            assert parse_trailers(frame.payload).get("grpc-status") != "0"
+
     assert_main_path_still_healthy()
 
 
@@ -228,8 +242,10 @@ def test_repeated_after_data_transport_faults_do_not_accumulate_request_memory()
 
     for mode in ("rst-after-data", "tcp-reset-after-data"):
         for _ in range(8):
-            payload = observe_first_fault_data(mode)
-            assert payload.startswith(protobuf_string_field_1("before-transport-fault"))
+            frames = observe_fault_frames(mode)
+            assert frames[0].payload.startswith(
+                protobuf_string_field_1("before-transport-fault")
+            )
 
     time.sleep(0.3)
     after = nginx_rss_kb()
