@@ -23,6 +23,7 @@ class HostInfoTests(unittest.TestCase):
             "cgroup_version": "2",
             "gateway_cpuset": "0-3",
             "backend_cpuset": "4-7",
+            "loadgen_cpuset": "8-11",
             "cpu_governors": ["performance"],
         }
         other = {**base, "timestamp_utc": "2026-08-16T00:00:00Z", "hostname": "bench-b"}
@@ -32,7 +33,8 @@ class HostInfoTests(unittest.TestCase):
         issues = validate_preflight(
             {
                 "gateway_cpuset": "0-3",
-                "backend_cpuset": "3-7",
+                "backend_cpuset": "4-7",
+                "loadgen_cpuset": "3,8-9",
                 "cpu_governors": ["performance"],
                 "cgroup_version": "2",
             },
@@ -40,14 +42,21 @@ class HostInfoTests(unittest.TestCase):
         )
         self.assertTrue(any(item["level"] == "error" and item["code"] == "cpuset_overlap" for item in issues))
 
-    def test_strict_preflight_requires_pinned_gateway_and_backend(self):
+    def test_strict_preflight_requires_all_three_cpu_sets(self):
         issues = validate_preflight(
-            {"gateway_cpuset": "", "backend_cpuset": "", "cpu_governors": ["performance"], "cgroup_version": "2"},
+            {
+                "gateway_cpuset": "",
+                "backend_cpuset": "",
+                "loadgen_cpuset": "",
+                "cpu_governors": ["performance"],
+                "cgroup_version": "2",
+            },
             strict=True,
         )
         codes = {item["code"] for item in issues if item["level"] == "error"}
         self.assertIn("gateway_cpuset_missing", codes)
         self.assertIn("backend_cpuset_missing", codes)
+        self.assertIn("loadgen_cpuset_missing", codes)
 
 
 if __name__ == "__main__":
