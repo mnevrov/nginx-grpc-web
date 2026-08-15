@@ -1,107 +1,205 @@
-# v0.1 release checklist
+# v0.1.0 release checklist
 
-## Source and scope
+Этот checklist разделяет **готовность кода**, **machine-checkable release evidence**, **controlled/staging acceptance** и **production rollout**.
 
-- [ ] release commit находится в `main`;
-- [x] `README.md`, `docs/PROTOCOL_CONTRACT.md`, `docs/COMPATIBILITY.md` и `docs/DEPLOYMENT.md` соответствуют коду;
-- [x] scope v0.1 не расширен на client streaming, bidi, JSON, CORS/auth/routing;
-- [x] нет generated build artifacts в source tree.
+Наличие tooling не закрывает evidence gate автоматически. Checkbox отмечается только когда соответствующее evidence реально существует для exact release commit.
 
-## Compatibility CI
+## 1. Source and scope
 
-Подтверждено post-merge `main` run #76 (`31888310660`) на commit `82729f5f3e026df820b01cfb5a9d2d36a7f31d85`.
+Текущая M13 production-code baseline: `249cf1d013fc04db8cebd54ae4e061b879c1f381` в `main`.
 
-- [x] NGINX stable 1.30.4 + GCC build/load smoke green;
-- [x] NGINX stable 1.30.4 + Clang build/load smoke green;
-- [x] NGINX mainline 1.31.3 + GCC build/load smoke green;
-- [x] NGINX mainline 1.31.3 + Clang build/load smoke green;
-- [x] full protocol/hardening/differential suite green на 1.30.4;
-- [x] full protocol/hardening/differential suite green на 1.31.3;
-- [x] Chromium browser suite green;
-- [x] Firefox browser suite green;
-- [x] WebKit browser suite green;
-- [x] ASAN/UBSAN green;
-- [x] Base64/frame fuzz smoke green.
+- [x] grpc-web v0.1 scope заморожен: unary binary/text + server streaming;
+- [x] client streaming, bidi, grpc-web JSON остаются вне scope;
+- [x] CORS/auth/routing/retries/service discovery не перенесены внутрь модуля;
+- [x] M13 lifecycle/soak harness merged в `main`;
+- [ ] финальный release commit M14 находится в `main`;
+- [ ] release source tree clean;
+- [ ] release notes/changelog указывают на финальный release commit, а не более раннюю baseline.
 
-## Security / hardening
+## 2. Compatibility and code CI
 
-- [x] exact media-type activation regression green;
-- [x] malformed/incomplete Base64 regression green;
-- [x] oversized/truncated frame regressions green;
-- [x] missing native trailers cannot produce false success;
-- [x] repeated cancellation/reset RSS gates green;
-- [x] payload/Authorization secret logging regression green.
+M8–M13 уже доказали работоспособность test harness и текущего protocol contract, но перед tag требуется **post-merge run на exact release commit**.
 
-## Artifact
+Поддерживаемый v0.1 matrix:
 
-Versioned artifact naming recommendation:
+- NGINX stable `1.30.4`;
+- NGINX mainline `1.31.3`;
+- GCC + Clang build/load checks;
+- Chromium + Firefox + WebKit browser runtime.
 
-```text
-ngx_http_grpc_web_module-v0.1.0-nginx-1.30.4-linux-amd64-gcc.so
-```
+Release gates:
 
-Каждый binary artifact должен сопровождаться:
+- [ ] stable 1.30.4 + GCC build/load green на exact release commit;
+- [ ] stable 1.30.4 + Clang build/load green на exact release commit;
+- [ ] mainline 1.31.3 + GCC build/load green на exact release commit;
+- [ ] mainline 1.31.3 + Clang build/load green на exact release commit;
+- [ ] protocol suite green;
+- [ ] Envoy differential suite green;
+- [ ] Chromium real React/`grpc-web` suite green;
+- [ ] Firefox real React/`grpc-web` suite green;
+- [ ] WebKit real React/`grpc-web` suite green;
+- [ ] ASAN/UBSAN green;
+- [ ] Base64/frame fuzz smoke green;
+- [ ] media-type/malformed-frame/transport-reset/logging hardening green.
 
-- exact project tag/commit;
-- exact NGINX version;
-- compiler;
-- OS/architecture/build environment;
-- `--with-compat` declaration;
-- SHA256 checksum;
-- compatibility disclaimer для vendor/distro NGINX packages.
+IDs/URLs exact release CI runs должны быть сохранены в release evidence/release notes.
 
-Для Docker-produced artifact:
+## 3. M14 release evidence tooling
+
+Tooling считается реализованным только после merge M14, но production evidence появляется только после controlled/staging выполнения.
+
+- [x] deterministic pure release evaluator реализован в M14 branch;
+- [x] failure-mode tests включают checksum, stale SHA, host mismatch, short soak и `harness_only` promotion;
+- [x] collector пересчитывает artifact SHA256 и читает package/M12/M13 provenance;
+- [x] `make release-check` формирует self-contained evidence bundle;
+- [x] shared-CI design требует `harness_only/inconclusive`;
+- [ ] exact M14 PR head release-evidence workflow green;
+- [ ] M14 merged в `main`;
+- [ ] post-merge release-evidence mechanics run green.
+
+Подробности: `docs/RELEASE_EVIDENCE.md`.
+
+## 4. Binary artifact
+
+Production release не публикует generic `.so` для всех NGINX packages.
+
+Для выбранного artifact target:
 
 ```bash
-make package-module NGINX_VERSION=1.30.4 BUILD_CC=gcc
+NGINX_VERSION=1.30.4 BUILD_CC=gcc make package-module
 ```
 
-Перед публикацией проверить `MANIFEST.txt` и `SHA256SUMS`.
+или в составе полного evidence command:
 
-Не публиковать один generic `.so` с обещанием совместимости со всеми NGINX packages.
+```bash
+RELEASE_GATES=/data/rc/gates.json \
+RELEASE_CONTROLLED_DIR=/data/rc/controlled \
+RELEASE_SOAK_DIR=/data/rc/soak \
+make release-check
+```
 
-## Release tag
+Проверки:
 
-Рекомендуемый первый tag:
+- [ ] `.so` заново собран из exact release commit;
+- [ ] `MANIFEST.txt.source_commit` совпадает с release commit;
+- [ ] NGINX/compiler/platform/build mode зафиксированы;
+- [ ] SHA256 пересчитан по реальному `.so` и совпадает с `SHA256SUMS`;
+- [ ] artifact сохранён вместе с release evidence bundle;
+- [ ] compatibility disclaimer для distro/vendor NGINX сохранён.
+
+## 5. Controlled-host performance evidence
+
+Shared GitHub runner не закрывает этот раздел.
+
+Требуется M12 strict controlled run на одной стабильной машине с непересекающимися CPU sets gateway/backend/loadgen.
+
+- [ ] host preflight `strict=true`, `valid=true`;
+- [ ] host fingerprint сохранён;
+- [ ] минимум policy-defined repeat count выполнен;
+- [ ] full TLS/H2 capacity staircases сохранены;
+- [ ] repeat variance укладывается в policy;
+- [ ] `decision.json.evidence_class == controlled`;
+- [ ] architecture decision не `inconclusive`;
+- [ ] controlled manifest source commit совпадает с release commit;
+- [ ] raw repeat artifacts сохранены в release bundle.
+
+## 6. Strict soak evidence
+
+Shared `perf-soak-smoke` проверяет orchestration и **не закрывает этот раздел**.
+
+### Mandatory 2-hour gate
+
+- [ ] soak strict host preflight valid;
+- [ ] source commit совпадает с release commit;
+- [ ] host fingerprint совпадает с M12 controlled decision;
+- [ ] duration `>= 7200 s`;
+- [ ] RSS slope/growth policy green;
+- [ ] steady/churn/cancel accounting green;
+- [ ] hard backend disruption наблюдался и recovery green;
+- [ ] transport resets accounted и recovery green;
+- [ ] final healthy probe green;
+- [ ] NGINX master/container не перезапускались;
+- [ ] `soak.json.evidence_class == controlled`;
+- [ ] `soak.json.verdict == soak_pass`;
+- [ ] raw samples/events/cycles сохранены.
+
+### Recommended 8-hour RC soak
+
+- [ ] отдельный `SOAK_DURATION_SECONDS=28800` RC run выполнен;
+- [ ] 8h artifact сохранён рядом с release evidence;
+- [ ] если 8h recommendation сознательно пропущена, решение и rationale зафиксированы вручную.
+
+## 7. Final M14 bundle
+
+Ожидаемый bundle:
 
 ```text
-v0.1.0
+dist/release/v0.1.0-rc/
+  gates.json
+  release-evidence.json
+  release-evidence.md
+  artifacts/...
+  controlled/...
+  soak/...
 ```
 
-M8 code baseline подтверждён зелёным post-merge CI на `82729f5f3e026df820b01cfb5a9d2d36a7f31d85`.
+- [ ] `make release-check` завершился успешно без `RELEASE_ALLOW_INCONCLUSIVE=1`;
+- [ ] `evidence_class == controlled`;
+- [ ] `verdict == release_candidate`;
+- [ ] blockers пусты;
+- [ ] bundle сохранён в постоянном release storage;
+- [ ] bundle вручную просмотрен на provenance consistency.
 
-После merge release-prep PR тег должен указывать на resulting `main` commit только после зелёного post-merge CI этого commit. Release metadata входит в tag, поэтому тег не ставится на более ранний commit.
+`release_candidate` — это machine-checkable M14 state, а не разрешение автоматически ставить tag.
 
-## Pre-production acceptance
+## 8. Staging acceptance
 
-- [ ] module artifact установлен в staging тем же способом, что и production;
+Artifact устанавливается тем же способом, который будет использовать production.
+
 - [ ] `nginx -t` green;
-- [ ] effective config сохранён через `nginx -T`;
-- [ ] real React client unary binary green;
-- [ ] real React client grpc-web-text unary green;
-- [ ] real React client server streaming incremental green;
-- [ ] non-zero status/message green;
-- [ ] cancellation/deadline green;
-- [ ] unavailable/timeout green;
-- [ ] long stream/RSS observation green;
-- [ ] rollback path operationally tested.
+- [ ] effective `nginx -T` сохранён;
+- [ ] настоящий React client: unary binary green;
+- [ ] настоящий React client: grpc-web-text unary green;
+- [ ] настоящий React client: server streaming incremental green;
+- [ ] non-zero `grpc-status` / `grpc-message` green;
+- [ ] client cancellation propagation green;
+- [ ] deadline / `grpc-timeout` green;
+- [ ] upstream unavailable normalization green;
+- [ ] proxy timeout normalization green;
+- [ ] long stream RSS observation acceptable;
+- [ ] rollback с native NGINX path обратно на Envoy практически проверен.
 
-## Production rollout
+## 9. Tag and GitHub Release
+
+До закрытия source/CI/artifact/controlled/soak/staging gates tag не создаётся.
+
+- [ ] финальный release commit находится в `main`;
+- [ ] post-merge exact-commit CI green;
+- [ ] final controlled M14 bundle сохранён;
+- [ ] staging acceptance закрыт;
+- [ ] tag `v0.1.0` вручную указывает на exact release commit;
+- [ ] GitHub Release создан из `docs/RELEASE_NOTES_v0.1.0.md`;
+- [ ] published artifact checksums записаны в release notes;
+- [ ] final CI/evidence references записаны в release notes.
+
+## 10. Production rollout
 
 Следовать `docs/ROLLOUT.md`.
 
-- [ ] baseline captured;
+- [ ] production baseline captured;
 - [ ] 1% canary;
-- [ ] 5-10%;
-- [ ] 25-50%;
+- [ ] 5–10%;
+- [ ] 25–50%;
 - [ ] 100%;
-- [ ] Envoy rollback pool сохранён на agreed rollback window;
-- [ ] removal Envoy оформляется отдельным change после стабильного observation window.
+- [ ] Envoy rollback pool остаётся warm на agreed observation window;
+- [ ] errors/latency/RSS сравниваются с baseline на каждом этапе;
+- [ ] rollback criteria операционно понятны и проверены;
+- [ ] удаление Envoy оформлено отдельным change после стабильного observation window.
 
-## Post-release
+## 11. Post-release maintenance
 
-- [ ] сохранить final release CI run URL/ID в release notes;
-- [ ] сохранить checksums published artifacts;
-- [ ] зафиксировать NGINX compatibility matrix датой;
-- [ ] при новом stable/mainline NGINX обновлять matrix отдельным compatibility PR;
-- [ ] security releases NGINX, особенно изменения `ngx_http_grpc_module`, имеют приоритет над обычным release cadence проекта.
+- [ ] compatibility matrix зафиксирована датой release;
+- [ ] security updates NGINX отслеживаются с приоритетом;
+- [ ] новый stable/mainline NGINX добавляется отдельным compatibility PR;
+- [ ] published release evidence остаётся доступным для аудита;
+- [ ] никакой последующий artifact не переиспользует `v0.1.0` checksum после изменения source/build environment.
