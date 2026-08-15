@@ -1,6 +1,8 @@
 import base64
 import os
+import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import httpx
@@ -83,6 +85,8 @@ def observe_text_stream(
     message: str = "stream",
     count: int = 3,
     delay_ms: int = 250,
+    consumer_delay_ms: int = 0,
+    timeout: float = 10,
 ) -> StreamObservation:
     payload = stream_request(message, count, delay_ms)
     encoded = base64.b64encode(encode_data_frame(payload))
@@ -96,7 +100,7 @@ def observe_text_stream(
         f"{url}/grpcwebtest.TestService/Stream",
         content=encoded,
         headers=text_headers(),
-        timeout=10,
+        timeout=timeout,
     ) as response:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith(
@@ -107,6 +111,8 @@ def observe_text_stream(
         for frame in iter_text_frames(response.iter_raw()):
             frames.append(frame)
             arrivals.append(time.monotonic() - started)
+            if consumer_delay_ms:
+                time.sleep(consumer_delay_ms / 1000.0)
 
     return StreamObservation(
         headers=headers,
@@ -114,6 +120,23 @@ def observe_text_stream(
         arrivals=arrivals,
         finished=time.monotonic() - started,
     )
+
+
+def nginx_rss_kb() -> int:
+    """Return aggregate RSS of NGINX master/workers inside the test container."""
+    script = r'''
+awk '
+  /^Name:/ { is_nginx = ($2 == "nginx") }
+  /^VmRSS:/ && is_nginx { sum += $2 }
+  END { print sum + 0 }
+' /proc/[0-9]*/status 2>/dev/null
+'''
+    raw = subprocess.check_output(
+        ["docker", "compose", "exec", "-T", "nginx", "sh", "-c", script],
+        text=True,
+        timeout=5,
+    )
+    return int(raw.strip())
 
 
 def assert_incremental(
@@ -214,3 +237,62 @@ def test_nginx_text_server_stream_large_frames_are_not_whole_stream_buffered():
     assert [frame.payload for frame in observation.data_frames] == [
         expected_reply(message, sequence) for sequence in range(1, count + 1)
     ]
+
+
+@pytest.mark.integration
+def test_nginx_text_server_stream_survives_slow_consumer_backpressure():
+    count = 96
+    message = "slow-consumer-" + ("s" * 32768)
+
+    observation = observe_text_stream(
+        MODULE,
+        message=message,
+        count=count,
+        delay_ms=1,
+        consumer_delay_ms=15,
+        timeout=20,
+    )
+
+    assert len(observation.data_frames) == count
+    assert observation.frames[-1].is_trailer
+    assert observation.trailers["grpc-status"] == "0"
+    assert observation.trailers["x-test-trailer"] == "stream-ok"
+    assert observation.data_frames[0].payload == expected_reply(message, 1)
+    assert observation.data_frames[-1].payload == expected_reply(message, count)
+
+
+@pytest.mark.integration
+def test_nginx_long_stream_does_not_retain_every_encoded_frame():
+    # Each response message is ~64 KiB; 480 frames are >30 MiB of native
+    # payload and >40 MiB after Base64. A per-frame request-pool allocation
+    # strategy retains far more than the allowed RSS delta until stream end.
+    count = 480
+    message = "rss-" + ("m" * 65536)
+    baseline = nginx_rss_kb()
+    samples = [baseline]
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            observe_text_stream,
+            MODULE,
+            message=message,
+            count=count,
+            delay_ms=4,
+            timeout=30,
+        )
+
+        while not future.done():
+            time.sleep(0.15)
+            samples.append(nginx_rss_kb())
+
+        observation = future.result()
+
+    assert len(observation.data_frames) == count
+    assert observation.trailers["grpc-status"] == "0"
+
+    peak_delta_kb = max(samples) - baseline
+    # Generous CI allowance. A streaming filter should keep working memory
+    # bounded to in-flight/current frames rather than total bytes streamed.
+    assert peak_delta_kb < 32 * 1024, (
+        f"NGINX RSS grew by {peak_delta_kb / 1024:.1f} MiB during long stream"
+    )
