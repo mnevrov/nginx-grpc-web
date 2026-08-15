@@ -78,7 +78,15 @@ native: native-nginx
 legacy: legacy-nginx + envoy
 ```
 
-Для каждого container сохраняются cumulative `cpu.stat:usage_usec` и `memory.current`. Измерение через host cgroup принципиально лучше для коротких streaming runs, чем `docker stats --no-stream`: нет ~1 s задержки sampler-а и не запускаются дополнительные процессы внутри измеряемого container.
+Для каждого container сохраняются три независимые величины:
+
+```text
+cpu_usage_usec        cumulative cpu.stat:usage_usec
+rss_bytes             сумма VmRSS всех PID из cgroup.procs
+memory_current_bytes  cgroup memory.current
+```
+
+Измерение через host cgroup принципиально лучше для коротких streaming runs, чем `docker stats --no-stream`: нет ~1 s задержки sampler-а и не запускаются дополнительные процессы внутри измеряемого container.
 
 `report.py` считает:
 
@@ -87,7 +95,9 @@ CPU core-seconds = Σ(last usage_usec - first usage_usec) / 1_000_000
 CPU core-seconds / GiB = core-seconds / useful payload GiB
 ```
 
-Для legacy CPU суммируется по front NGINX + Envoy. Peak RSS берётся как максимальная во времени сумма `memory.current` тех же gateway containers. Каждый measured run обязан иметь минимум два cgroup sample; иначе report завершается ошибкой вместо публикации нулевых CPU/RSS.
+Для legacy CPU и memory метрики суммируются по front NGINX + Envoy. **Peak RSS** — максимальная во времени сумма process `VmRSS`; это та же семантика RSS, которая используется в lifecycle regression tests проекта. `memory.current` хранится отдельно как `peak_cgroup_memory_mib`, потому что включает page cache и другую память, списанную на cgroup, и не должна называться RSS.
+
+Каждый measured run обязан иметь минимум два cgroup sample; иначе report завершается ошибкой вместо публикации нулевых CPU/RSS.
 
 Требование perf host: Linux cgroup v2 с доступным `/proc/<container-pid>/cgroup` и `/sys/fs/cgroup`. Обычные современные Docker hosts, включая текущий Ubuntu GitHub runner, этому соответствуют.
 
@@ -147,7 +157,7 @@ perf/
 
 ```text
 *.json       raw loadgen result
-*.stats.tsv  raw cgroup CPU/RSS samples
+*.stats.tsv  raw cgroup CPU/RSS/cgroup-memory samples
 report.json  aggregated machine-readable comparison
 report.md    human-readable A/B table
 ```
