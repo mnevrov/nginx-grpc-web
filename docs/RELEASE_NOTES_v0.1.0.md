@@ -4,7 +4,7 @@
 
 ## Что это за релиз
 
-`v0.1.0` — первый release candidate проекта `ngx_http_grpc_web_module`, предназначенного для удаления Envoy grpc_web filter из request path без изменения существующего React/`grpc-web` клиента.
+`v0.1.0` — первый production-oriented релиз проекта `ngx_http_grpc_web_module`, предназначенного для удаления Envoy grpc_web filter из request path без изменения существующего React/`grpc-web` клиента.
 
 Целевая схема:
 
@@ -87,9 +87,11 @@ Post-merge `main` CI:
 ```text
 run #76
 id: 31888310660
+result: success
+commit: 82729f5f3e026df820b01cfb5a9d2d36a7f31d85
 ```
 
-Перед постановкой тега `v0.1.0` run #76 должен иметь `success` на exact merge commit выше.
+Это подтверждённая code baseline для `v0.1.0`. Release-prep PR добавляет только changelog/release metadata. После его merge тег `v0.1.0` должен указывать на resulting `main` commit **только после** зелёного post-merge CI этого commit.
 
 ## Artifact
 
