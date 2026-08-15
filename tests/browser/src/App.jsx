@@ -20,10 +20,14 @@ function readOptions() {
   };
 }
 
+function initialHarness() {
+  return { status: "running", events: [], error: null, trace: [] };
+}
+
 export function App() {
   const optionsRef = useRef(readOptions());
   const startedRef = useRef(performance.now());
-  const [state, setState] = useState({ status: "running", events: [], error: null });
+  const [state, setState] = useState(initialHarness());
 
   useEffect(() => {
     const options = optionsRef.current;
@@ -31,20 +35,34 @@ export function App() {
     let terminal = false;
     let stream = null;
 
+    const current = () => window.__grpcWebHarness ?? initialHarness();
+
     const publish = (next) => {
       if (disposed) return;
       window.__grpcWebHarness = next;
       setState(next);
     };
 
-    const currentEvents = () => window.__grpcWebHarness?.events ?? [];
-
-    const fail = (code, message) => {
-      if (terminal) return;
-      terminal = true;
+    const trace = (type, detail = null) => {
+      if (disposed) return;
+      const prev = current();
       publish({
+        ...prev,
+        trace: [
+          ...(prev.trace ?? []),
+          { type, detail, t: performance.now() - startedRef.current },
+        ],
+      });
+    };
+
+    const fail = (code, message, source) => {
+      if (terminal) return;
+      trace(source, { code: code ?? null, message: message ?? "" });
+      terminal = true;
+      const prev = current();
+      publish({
+        ...prev,
         status: "error",
-        events: currentEvents(),
         error: { code: code ?? null, message: message ?? "" },
       });
     };
@@ -54,7 +72,8 @@ export function App() {
         .then((msg) => {
           if (terminal) return;
           terminal = true;
-          publish({
+          const next = {
+            ...current(),
             status: "done",
             events: [
               {
@@ -64,14 +83,16 @@ export function App() {
               },
             ],
             error: null,
-          });
+          };
+          publish(next);
         })
         .catch((err) => {
-          fail(err.code, err.message ?? String(err));
+          fail(err.code, err.message ?? String(err), "error");
         });
     };
 
-    window.__grpcWebHarness = { status: "running", events: [], error: null };
+    window.__grpcWebHarness = initialHarness();
+    setState(window.__grpcWebHarness);
 
     if (options.rpc === "unary-binary") {
       runUnary(unaryBinary(options.endpoint, options.message));
@@ -99,47 +120,50 @@ export function App() {
     const onData = (msg) => {
       if (terminal) return;
 
-      setState((prev) => {
-        const events = [
-          ...prev.events,
-          {
-            sequence: msg.sequence,
-            message: msg.message,
-            t: performance.now() - startedRef.current,
-          },
-        ];
+      const prev = current();
+      const event = {
+        sequence: msg.sequence,
+        message: msg.message,
+        t: performance.now() - startedRef.current,
+      };
+      const events = [...prev.events, event];
+      const next = {
+        ...prev,
+        events,
+        trace: [...(prev.trace ?? []), { type: "data", detail: event, t: event.t }],
+      };
 
-        if (options.cancelAfter && events.length >= options.cancelAfter) {
-          terminal = true;
-          stream.cancel();
-          const next = { status: "cancelled", events, error: null };
-          window.__grpcWebHarness = next;
-          return next;
-        }
+      if (options.cancelAfter && events.length >= options.cancelAfter) {
+        terminal = true;
+        stream.cancel();
+        publish({ ...next, status: "cancelled", error: null });
+        return;
+      }
 
-        const next = { ...prev, events };
-        window.__grpcWebHarness = next;
-        return next;
-      });
+      publish(next);
     };
 
     const onError = (err) => {
-      fail(err.code, err.message ?? String(err));
+      fail(err.code, err.message ?? String(err), "error");
     };
 
     const onStatus = (status) => {
-      if (terminal || !status || status.code === 0) return;
-      fail(status.code, status.details ?? status.message ?? "");
+      if (terminal || !status) return;
+      if (status.code !== 0) {
+        fail(status.code, status.details ?? status.message ?? "", "status");
+        return;
+      }
+      trace("status", {
+        code: status.code,
+        message: status.details ?? status.message ?? "",
+      });
     };
 
     const onEnd = () => {
       if (terminal) return;
+      trace("end");
       terminal = true;
-      setState((prev) => {
-        const next = { ...prev, status: "done" };
-        window.__grpcWebHarness = next;
-        return next;
-      });
+      publish({ ...current(), status: "done" });
     };
 
     stream.on("data", onData);
@@ -151,8 +175,6 @@ export function App() {
       disposed = true;
       if (!terminal) {
         terminal = true;
-        // React StrictMode mounts effects twice in development. Cancel the first
-        // stream so the harness still observes exactly one production-like call.
         stream.cancel();
       }
     };
