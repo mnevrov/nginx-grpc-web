@@ -418,7 +418,7 @@ Application gRPC aborts, deadlines и cancellation проходят через s
 - machine-readable `decision.json` + `decision.md`;
 - shared CI forced to `harness_only/inconclusive`.
 
-### M13 — soak / production readiness 🚧
+### M13 — soak / production readiness ✅
 
 - continuous cgroup-v2 RSS trend and MiB/hour slope;
 - steady, churn and exact client-cancellation accounting;
