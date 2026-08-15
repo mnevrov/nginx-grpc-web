@@ -1,0 +1,27 @@
+name: release-evidence
+
+on:
+  pull_request:
+    paths:
+      - "release/**"
+      - "scripts/package-module.sh"
+      - ".github/workflows/release-evidence.yml"
+      - "Makefile"
+      - "docs/RELEASE_EVIDENCE.md"
+      - "docs/RELEASE_CHECKLIST.md"
+  workflow_dispatch:
+
+concurrency:
+  group: release-evidence-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Release evidence unit/failure-mode tests
+        run: make release-evidence-test
