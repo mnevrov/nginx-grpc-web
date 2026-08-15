@@ -20,6 +20,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r tests/protocol/requirements.txt
       - run: make unit
+      - run: make perf-capacity-test
 
   perf-loadgen:
     runs-on: ubuntu-latest
@@ -88,6 +89,54 @@ jobs:
         with:
           name: perf-h2-smoke-results
           path: /tmp/perf-h2-smoke/
+          if-no-files-found: warn
+          retention-days: 3
+
+  perf-capacity-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        frontend: ["http1", "tls-h2"]
+    env:
+      NGINX_VERSION: "1.30.4"
+      BUILD_CC: gcc
+      PERF_FRONTEND: ${{ matrix.frontend }}
+      PERF_OUTPUT_DIR: /tmp/perf-capacity-${{ matrix.frontend }}
+      PERF_CAPACITY_SLO: perf/scenarios/capacity-smoke-slo.json
+      PERF_CAPACITY_STEPS: "1,2"
+      PERF_CAPACITY_MESSAGES: "2"
+      PERF_CAPACITY_DELAY_MS: "5"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - run: bash ./perf/run-ab.sh capacity
+      - run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          frontend = os.environ['PERF_FRONTEND']
+          root = Path(os.environ['PERF_OUTPUT_DIR'])
+          result = json.loads((root / 'capacity.json').read_text())
+          assert result['scenario']['frontend'] == frontend
+          assert result['scenario']['transport'] == 'text'
+          for arch in ('legacy', 'native'):
+              points = result['architectures'][arch]['points']
+              assert [p['streams'] for p in points] == [1, 2], (arch, points)
+              assert all(p['pass'] for p in points), (arch, points)
+              assert result['architectures'][arch]['max_sustainable_streams'] == 2
+              assert result['architectures'][arch]['first_failed_streams'] is None
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-capacity-${{ matrix.frontend }}-results
+          path: /tmp/perf-capacity-${{ matrix.frontend }}/
           if-no-files-found: warn
           retention-days: 3
 
