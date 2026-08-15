@@ -65,18 +65,32 @@ def canonical(response: httpx.Response, frames: list) -> tuple[list[bytes], dict
     assert response.headers["content-type"].startswith(
         "application/grpc-web-text+proto"
     )
+
+    data = [frame.payload for frame in frames if not frame.is_trailer]
+    trailers: dict[str, str] = {}
+
+    if frames and frames[-1].is_trailer:
+        trailers.update(parse_trailers(frames[-1].payload))
+
+    # A trailers-only gRPC response may surface grpc-status/grpc-message as
+    # response headers rather than as a grpc-web body trailer frame. That is
+    # wire-shape variance, not an observable RPC semantic difference.
+    for key in ("grpc-status", "grpc-message", "x-test-trailer"):
+        if key in response.headers and key not in trailers:
+            trailers[key] = response.headers[key]
+
+    return data, trailers
+
+
+def canonical_success(response: httpx.Response, frames: list) -> tuple[list[bytes], dict[str, str]]:
     assert frames
     assert frames[-1].is_trailer
-
-    return (
-        [frame.payload for frame in frames if not frame.is_trailer],
-        parse_trailers(frames[-1].payload),
-    )
+    return canonical(response, frames)
 
 
 @pytest.mark.integration
 def test_nginx_text_unary_response():
-    data, trailers = canonical(*call_text_unary(MODULE))
+    data, trailers = canonical_success(*call_text_unary(MODULE))
 
     assert data == [b"\x0a\x05hello\x10\x01"]
     assert trailers["grpc-status"] == "0"
@@ -85,8 +99,8 @@ def test_nginx_text_unary_response():
 
 @pytest.mark.integration
 def test_nginx_text_unary_response_matches_envoy():
-    envoy = canonical(*call_text_unary(REFERENCE))
-    nginx = canonical(*call_text_unary(MODULE))
+    envoy = canonical_success(*call_text_unary(REFERENCE))
+    nginx = canonical_success(*call_text_unary(MODULE))
     assert nginx == envoy
 
 
@@ -96,8 +110,8 @@ def test_nginx_text_response_fragmented_native_frame_matches_envoy():
     # necessarily split across upstream buffers before the module sees it.
     message = "fragment-me-" + ("x" * 8192)
 
-    envoy = canonical(*call_text_unary(REFERENCE, message))
-    nginx = canonical(*call_text_unary(MODULE, message))
+    envoy = canonical_success(*call_text_unary(REFERENCE, message))
+    nginx = canonical_success(*call_text_unary(MODULE, message))
     assert nginx == envoy
 
 
