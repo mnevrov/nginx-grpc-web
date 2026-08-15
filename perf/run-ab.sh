@@ -27,7 +27,7 @@ trap cleanup EXIT INT TERM
   go test ./...
   go build -trimpath -o "$LOADGEN" .
 )
-python3 -m unittest -q "$ROOT/perf/test_capacity.py"
+python3 "$ROOT/perf/test_capacity.py" -q
 
 bash "$ROOT/perf/generate-tls.sh" "$CERT_DIR"
 
