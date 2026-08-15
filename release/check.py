@@ -4,8 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
-from collect import EvidenceInputError, collect_bundle, git_source
+from collect import EvidenceInputError, collect_bundle, git_source, load_json
 from evidence import ReleasePolicy, evaluate_release, render_markdown
 
 
@@ -42,6 +43,49 @@ def failure_markdown(result: dict) -> str:
     ])
 
 
+def apply_revalidation(result: dict[str, Any], revalidation: dict[str, Any]) -> dict[str, Any]:
+    output = dict(result)
+    output["blockers"] = list(result.get("blockers", []))
+    output["advisory"] = list(result.get("advisory", []))
+    output["raw_revalidation"] = dict(revalidation)
+
+    evidence_class = str(output.get("evidence_class", ""))
+    if evidence_class == "controlled":
+        if revalidation.get("valid") is not True:
+            if "raw_revalidation" not in output["blockers"]:
+                output["blockers"].append("raw_revalidation")
+    else:
+        if revalidation.get("valid") is False:
+            if "raw_revalidation" not in output["blockers"]:
+                output["blockers"].append("raw_revalidation")
+        elif revalidation.get("skipped") != "harness_only":
+            if "revalidation_not_harness_only" not in output["blockers"]:
+                output["blockers"].append("revalidation_not_harness_only")
+
+    output["mechanics_pass"] = not output["blockers"]
+    if output["blockers"]:
+        output["verdict"] = "blocked"
+    elif evidence_class == "controlled":
+        output["verdict"] = "release_candidate"
+    else:
+        output["verdict"] = "inconclusive"
+    return output
+
+
+def render_with_revalidation(result: dict[str, Any]) -> str:
+    text = render_markdown(result)
+    raw = result.get("raw_revalidation", {})
+    lines = [text.rstrip(), "", "## Raw evidence revalidation", ""]
+    if raw.get("valid") is True:
+        lines.append("- controlled capacity/decision and strict soak aggregates were recomputed from raw evidence and matched")
+    elif raw.get("skipped") == "harness_only":
+        lines.append("- skipped intentionally for `harness_only` CI mechanics evidence")
+    else:
+        lines.append(f"- invalid: `{raw.get('error', 'unknown revalidation state')}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def write_result(output: Path, markdown: Path, result: dict, text: str) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     markdown.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +103,7 @@ def main() -> int:
     parser.add_argument("--package-dir", required=True, type=Path)
     parser.add_argument("--controlled-dir", required=True, type=Path)
     parser.add_argument("--soak-dir", required=True, type=Path)
+    parser.add_argument("--revalidation", required=True, type=Path)
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--markdown", required=True, type=Path)
@@ -82,8 +127,9 @@ def main() -> int:
             controlled_dir=args.controlled_dir,
             soak_dir=args.soak_dir,
         )
-        result = evaluate_release(bundle, policy)
-        text = render_markdown(result)
+        revalidation = load_json(args.revalidation, "raw evidence revalidation")
+        result = apply_revalidation(evaluate_release(bundle, policy), revalidation)
+        text = render_with_revalidation(result)
     except (EvidenceInputError, ValueError, OSError, json.JSONDecodeError) as exc:
         result = failure_result(args.release_version, str(exc))
         text = failure_markdown(result)
