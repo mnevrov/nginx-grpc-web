@@ -17,6 +17,13 @@ jobs:
       - run: pip install -r tests/protocol/requirements.txt
       - run: make unit
 
+  hardening:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make sanitizers CC=clang
+      - run: make fuzz-smoke FUZZ_CC=clang
+
   build-module:
     runs-on: ubuntu-latest
     strategy:
