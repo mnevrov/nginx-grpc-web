@@ -130,7 +130,7 @@ def main() -> int:
         revalidation = load_json(args.revalidation, "raw evidence revalidation")
         result = apply_revalidation(evaluate_release(bundle, policy), revalidation)
         text = render_with_revalidation(result)
-    except (EvidenceInputError, ValueError, OSError, json.JSONDecodeError) as exc:
+    except (EvidenceInputError, ValueError, TypeError, OSError, json.JSONDecodeError) as exc:
         result = failure_result(args.release_version, str(exc))
         text = failure_markdown(result)
 
