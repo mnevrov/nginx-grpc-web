@@ -83,13 +83,22 @@ make reference-up
 make test-reference
 ```
 
-После появления рабочей реализации модуля:
+Для реализованного binary unary path:
 
 ```bash
+# backend + NGINX module
 make module-up
+
+# NGINX binary unary integration
 make test-module
+
+# canonical Envoy ↔ NGINX comparison
+# (Envoy также должен быть запущен)
+make reference-up
 make test-diff
-make test-browser       # real Chromium + React grpc-web client
+
+# real Chromium + React grpc-web client
+make test-browser
 ```
 
 ## Репозиторий устроен как test-first проект
@@ -131,4 +140,12 @@ Envoy считается reference implementation для наблюдаемог�
 
 ## Текущее состояние
 
-Bootstrap. Каркас, тестовая стратегия и agent workflow готовы. Реализация протокольного пути должна идти небольшими PR в порядке, заданном в `docs/IMPLEMENTATION_PLAN.md`.
+M0/M1 завершены. M2 реализует binary unary path:
+
+- gRPC-Web binary request headers нормализуются для native `ngx_http_grpc_module`;
+- binary request/response DATA framing проходит без protobuf parsing;
+- native gRPC trailers преобразуются в terminal gRPC-Web trailer frame;
+- NGINX и Envoy сравниваются canonical differential test;
+- тот же React `grpc-web` binary client проверяется через Playwright против обоих gateway.
+
+`grpc-web-text` request decoding остаётся отдельным M3: incremental Base64 state machine не смешивается с binary path.

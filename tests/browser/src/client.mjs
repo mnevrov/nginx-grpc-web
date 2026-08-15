@@ -3,6 +3,18 @@ import jspbPkg from "google-protobuf";
 
 const { BinaryReader, BinaryWriter } = jspbPkg;
 
+class UnaryRequest {
+  constructor(message = "") {
+    this.message = message;
+  }
+
+  serializeBinary() {
+    const w = new BinaryWriter();
+    if (this.message) w.writeString(1, this.message);
+    return w.getResultBuffer();
+  }
+}
+
 class StreamRequest {
   constructor(message = "", count = 3, delayMs = 250) {
     this.message = message;
@@ -47,7 +59,16 @@ class EchoReply {
   }
 }
 
-const method = new grpcWeb.MethodDescriptor(
+const unaryMethod = new grpcWeb.MethodDescriptor(
+  "/grpcwebtest.TestService/Unary",
+  grpcWeb.MethodType.UNARY,
+  UnaryRequest,
+  EchoReply,
+  (request) => request.serializeBinary(),
+  EchoReply.deserializeBinary,
+);
+
+const streamMethod = new grpcWeb.MethodDescriptor(
   "/grpcwebtest.TestService/Stream",
   grpcWeb.MethodType.SERVER_STREAMING,
   StreamRequest,
@@ -55,6 +76,18 @@ const method = new grpcWeb.MethodDescriptor(
   (request) => request.serializeBinary(),
   EchoReply.deserializeBinary,
 );
+
+export function unaryBinary(baseUrl, message = "browser") {
+  const client = new grpcWeb.GrpcWebClientBase({ format: "binary" });
+  const request = new UnaryRequest(message);
+
+  return client.unaryCall(
+    `${baseUrl}/grpcwebtest.TestService/Unary`,
+    request,
+    {},
+    unaryMethod,
+  );
+}
 
 export function openStream(baseUrl, options = {}) {
   const client = new grpcWeb.GrpcWebClientBase({ format: "text" });
@@ -68,6 +101,6 @@ export function openStream(baseUrl, options = {}) {
     `${baseUrl}/grpcwebtest.TestService/Stream`,
     request,
     {},
-    method,
+    streamMethod,
   );
 }

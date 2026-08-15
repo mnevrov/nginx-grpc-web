@@ -8,6 +8,17 @@ grpc_web_frame_parser_init(grpc_web_frame_parser_t *p)
     memset(p, 0, sizeof(*p));
 }
 
+void
+grpc_web_frame_write_header(uint8_t out[GRPC_WEB_FRAME_HEADER_SIZE],
+    uint8_t flags, uint32_t length)
+{
+    out[0] = flags;
+    out[1] = (uint8_t) (length >> 24);
+    out[2] = (uint8_t) (length >> 16);
+    out[3] = (uint8_t) (length >> 8);
+    out[4] = (uint8_t) length;
+}
+
 size_t
 grpc_web_frame_consume(grpc_web_frame_parser_t *p,
     const uint8_t *src, size_t src_len)
