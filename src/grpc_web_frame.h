@@ -18,6 +18,9 @@ typedef struct {
 
 void grpc_web_frame_parser_init(grpc_web_frame_parser_t *p);
 
+void grpc_web_frame_write_header(uint8_t out[GRPC_WEB_FRAME_HEADER_SIZE],
+    uint8_t flags, uint32_t length);
+
 /*
  * Consume only enough bytes to complete the current frame header/payload.
  * The caller owns buffering/forwarding of payload bytes.
