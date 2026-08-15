@@ -53,6 +53,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--release-version", default="v0.1.0")
+    parser.add_argument("--nginx-version", default="1.30.4")
+    parser.add_argument("--compiler", default="gcc")
     parser.add_argument("--gates", required=True, type=Path)
     parser.add_argument("--package-dir", required=True, type=Path)
     parser.add_argument("--controlled-dir", required=True, type=Path)
@@ -64,7 +66,11 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        policy = ReleasePolicy(release_version=args.release_version)
+        policy = ReleasePolicy(
+            release_version=args.release_version,
+            nginx_version=args.nginx_version,
+            compiler=args.compiler,
+        )
         if args.policy is not None:
             policy = ReleasePolicy.from_dict(json.loads(args.policy.read_text(encoding="utf-8")))
         source = git_source(args.repo_root)
