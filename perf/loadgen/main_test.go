@@ -3,6 +3,11 @@ package main
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -116,5 +121,54 @@ func TestPercentileUsesNearestRankInterpolation(t *testing.T) {
 	}
 	if got := percentile(values, 0.95); got < 4.7 || got > 5.0 {
 		t.Fatalf("p95=%v", got)
+	}
+}
+
+func TestNewHTTPTransportNegotiatesHTTP2WithCustomCA(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	certificate := server.Certificate()
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatalf("write CA: %v", err)
+	}
+
+	transport, err := newHTTPTransport(config{
+		Streams:        1,
+		TimeoutSeconds: 5,
+		CAFile:         caFile,
+	})
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+	defer transport.CloseIdleConnections()
+
+	response, err := (&http.Client{Transport: transport}).Get(server.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.ProtoMajor != 2 {
+		t.Fatalf("protocol=%s, want HTTP/2", response.Proto)
+	}
+	if response.TLS == nil || response.TLS.NegotiatedProtocol != "h2" {
+		t.Fatalf("ALPN=%q, want h2", response.TLS.NegotiatedProtocol)
+	}
+}
+
+func TestValidateResponseProtocolRejectsHTTP11WhenHTTP2Required(t *testing.T) {
+	response := &http.Response{Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1}
+	if err := validateResponseProtocol(response, true); err == nil {
+		t.Fatal("expected HTTP/1.1 rejection when HTTP/2 is required")
+	}
+	if err := validateResponseProtocol(response, false); err != nil {
+		t.Fatalf("HTTP/1.1 must be accepted when HTTP/2 is optional: %v", err)
 	}
 }
