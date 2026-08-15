@@ -255,7 +255,7 @@ TLS/H2 results are a production-like transport baseline, not literal browser cer
 
 Performance numbers from shared CI are never architecture evidence. A decision requires one stable controlled host configuration, isolated CPU budgets, repeated complete staircases and bounded variance. Raw per-repeat artifacts are preserved next to the aggregate decision.
 
-## M13 — Server-streaming soak / production readiness 🚧
+## M13 — Server-streaming soak / production readiness ✅
 
 - Go loadgen supports deterministic expected client cancellation after N DATA frames;
 - cancellation is counted separately from successful completion and cannot mask unexpected errors;
