@@ -69,10 +69,43 @@ case "$FRONTEND" in
     ;;
 esac
 
+print_loadgen_errors() {
+  local result=$1
+  python3 - "$result" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print(f"loadgen produced no JSON diagnostics: {path}", file=sys.stderr)
+    raise SystemExit(0)
+
+data = json.loads(path.read_text())
+for stream in data.get("streams", []):
+    if stream.get("error"):
+        print(
+            "stream {id}: {error}; http={http}; protocol={proto}; alpn={alpn}".format(
+                id=stream.get("id"),
+                error=stream.get("error"),
+                http=stream.get("http_status", ""),
+                proto=stream.get("http_protocol", ""),
+                alpn=stream.get("tls_alpn", ""),
+            ),
+            file=sys.stderr,
+        )
+PY
+}
+
 # Warm both gateway paths and the common backend before any measured run.
-# The warmup is deliberately discarded: it primes process/runtime/TLS state
-# without contaminating result aggregation or cgroup CPU/RSS samples.
+# Successful warmups are deleted. A failing warmup keeps its JSON result and
+# prints per-stream errors so CI failures are actionable without another run.
+warm_index=0
 for warm_url in "$native_url" "$legacy_url"; do
+  warm_index=$((warm_index + 1))
+  warm_result="$OUTPUT_DIR/warmup-${FRONTEND}-${warm_index}.json"
+
+  set +e
   "$LOADGEN" \
     -name warmup \
     "${loadgen_frontend_args[@]}" \
@@ -83,7 +116,16 @@ for warm_url in "$native_url" "$legacy_url"; do
     -delay-ms 10 \
     -payload-bytes 4096 \
     -timeout 30 \
-    >/dev/null
+    -output "$warm_result"
+  warm_rc=$?
+  set -e
+
+  if [[ "$warm_rc" != "0" ]]; then
+    echo "warmup failed: frontend=$FRONTEND url=$warm_url" >&2
+    print_loadgen_errors "$warm_result"
+    exit "$warm_rc"
+  fi
+  rm -f "$warm_result"
 done
 
 case_index=0
@@ -169,6 +211,7 @@ run_one() {
 
   if [[ "$rc" != "0" ]]; then
     echo "loadgen failed: $stem" >&2
+    print_loadgen_errors "$result"
     return "$rc"
   fi
 }
