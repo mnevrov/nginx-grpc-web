@@ -2,8 +2,9 @@
  * ngx_http_grpc_web_module
  *
  * Minimal gRPC-Web protocol adapter layered in front of ngx_http_grpc_module.
- * M2 implements binary unary request/response adaptation. Text mode remains
- * intentionally untouched until the incremental request/response milestones.
+ * M2 implements binary unary request/response adaptation.
+ * M3 adds incremental grpc-web-text request decoding while response text
+ * encoding intentionally remains deferred to M4.
  */
 
 #include <ngx_config.h>
@@ -30,7 +31,9 @@ typedef struct {
     grpc_web_b64_decoder_t request_decoder;
     grpc_web_b64_encoder_t response_encoder;
     grpc_web_frame_parser_t response_frame;
+    size_t decoded_request_size;
     unsigned active:1;
+    unsigned request_finished:1;
     unsigned trailers_sent:1;
 } ngx_http_grpc_web_ctx_t;
 
@@ -47,6 +50,9 @@ static ngx_int_t ngx_http_grpc_web_body_filter(ngx_http_request_t *r,
     ngx_chain_t *in);
 
 static ngx_int_t ngx_http_grpc_web_ensure_te(ngx_http_request_t *r);
+static ngx_int_t ngx_http_grpc_web_decode_text_request(
+    ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
+    ngx_chain_t *in, ngx_chain_t **out);
 static ngx_chain_t *ngx_http_grpc_web_build_trailer_frame(
     ngx_http_request_t *r);
 
@@ -197,35 +203,161 @@ ngx_http_grpc_web_rewrite_handler(ngx_http_request_t *r)
 
     ngx_http_set_ctx(r, ctx, ngx_http_grpc_web_module);
 
-    if (ctx->mode != NGX_GRPC_WEB_MODE_BINARY) {
-        return NGX_DECLINED;
-    }
-
+    /* Both binary and text gRPC-Web become native gRPC upstream. */
     ngx_str_set(&ct->value, "application/grpc");
 
     if (ngx_http_grpc_web_ensure_te(r) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
+    if (ctx->mode == NGX_GRPC_WEB_MODE_TEXT) {
+        /*
+         * The downstream Content-Length describes Base64 bytes, not decoded
+         * native gRPC bytes. Keep content_length_n intact while the core body
+         * parser consumes the downstream request, but detach the header pointer
+         * so ngx_http_grpc_module's $content_length does not forward the encoded
+         * value upstream. At the final decoded buffer we replace the numeric
+         * value with the actual decoded size for the fully-preread case.
+         */
+        r->headers_in.content_length = NULL;
+    }
+
     return NGX_DECLINED;
+}
+
+static ngx_int_t
+ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
+    ngx_http_grpc_web_ctx_t *ctx, ngx_chain_t *in, ngx_chain_t **out)
+{
+    int rc;
+    size_t cap, max_body, src_len, written;
+    ngx_buf_t *b, *ob;
+    ngx_chain_t *cl, *ol, **ll;
+    ngx_http_grpc_web_loc_conf_t *glcf;
+
+    *out = NULL;
+    ll = out;
+
+    glcf = ngx_http_get_module_loc_conf(r, ngx_http_grpc_web_module);
+    if (glcf->max_frame_size > NGX_MAX_SIZE_T_VALUE - GRPC_WEB_FRAME_HEADER_SIZE) {
+        max_body = NGX_MAX_SIZE_T_VALUE;
+    } else {
+        max_body = glcf->max_frame_size + GRPC_WEB_FRAME_HEADER_SIZE;
+    }
+
+    for (cl = in; cl != NULL; cl = cl->next) {
+        b = cl->buf;
+
+        if (!ngx_buf_in_memory(b)) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                          "grpc-web text request buffer is not in memory");
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        if (ctx->request_finished) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                          "grpc-web duplicate request data after final buffer");
+            return NGX_HTTP_BAD_REQUEST;
+        }
+
+        src_len = (size_t) (b->last - b->pos);
+        if (src_len > NGX_MAX_SIZE_T_VALUE - 2) {
+            return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
+        }
+
+        /* A pending 3-byte Base64 prefix can make output 2 bytes larger. */
+        cap = src_len + 2;
+        if (cap == 0) {
+            cap = 1;
+        }
+
+        ob = ngx_create_temp_buf(r->pool, cap);
+        if (ob == NULL) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        written = 0;
+        rc = grpc_web_b64_decode_update(&ctx->request_decoder,
+            b->pos, src_len, ob->last, cap, &written, b->last_buf);
+
+        if (rc == -1) {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                          "grpc-web malformed base64 request body");
+            return NGX_HTTP_BAD_REQUEST;
+        }
+
+        if (rc != 0) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                          "grpc-web base64 decoder output sizing failure");
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        if (ctx->decoded_request_size > max_body
+            || written > max_body - ctx->decoded_request_size)
+        {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                          "grpc-web decoded request body too large");
+            return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
+        }
+
+        ctx->decoded_request_size += written;
+        ob->last += written;
+        ob->flush = b->flush;
+        ob->sync = b->sync;
+        ob->last_buf = b->last_buf;
+        ob->last_in_chain = b->last_in_chain;
+
+        /* The source buffer has been fully consumed by the decoder. */
+        b->pos = b->last;
+
+        if (written != 0 || ob->last_buf || ob->flush || ob->sync) {
+            ol = ngx_alloc_chain_link(r->pool);
+            if (ol == NULL) {
+                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+
+            ol->buf = ob;
+            ol->next = NULL;
+            *ll = ol;
+            ll = &ol->next;
+        }
+
+        if (b->last_buf) {
+            if (ctx->decoded_request_size > (size_t) NGX_MAX_OFF_T_VALUE) {
+                return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
+            }
+
+            ctx->request_finished = 1;
+            r->headers_in.content_length_n =
+                (off_t) ctx->decoded_request_size;
+        }
+    }
+
+    return NGX_OK;
 }
 
 static ngx_int_t
 ngx_http_grpc_web_request_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
+    ngx_int_t rc;
+    ngx_chain_t *out;
     ngx_http_grpc_web_ctx_t *ctx;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_grpc_web_module);
-    if (ctx == NULL || !ctx->active) {
+    if (ctx == NULL || !ctx->active || ctx->mode != NGX_GRPC_WEB_MODE_TEXT) {
         return ngx_http_grpc_web_next_request_body_filter(r, in);
     }
 
-    /*
-     * Binary gRPC-Web DATA bytes use the native gRPC framing already, so M2
-     * deliberately passes them through unchanged. M3 replaces this branch for
-     * text mode with the incremental base64 decoder.
-     */
-    return ngx_http_grpc_web_next_request_body_filter(r, in);
+    if (in == NULL) {
+        return ngx_http_grpc_web_next_request_body_filter(r, NULL);
+    }
+
+    rc = ngx_http_grpc_web_decode_text_request(r, ctx, in, &out);
+    if (rc != NGX_OK) {
+        return rc;
+    }
+
+    return ngx_http_grpc_web_next_request_body_filter(r, out);
 }
 
 static ngx_int_t
