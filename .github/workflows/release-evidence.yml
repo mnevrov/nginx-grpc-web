@@ -118,6 +118,10 @@ jobs:
           assert result["mechanics_pass"] is True, result
           assert result["blockers"] == [], result
           assert "harness_only" in result["advisory"], result
+          assert result["raw_revalidation"]["valid"] is None, result
+          assert result["raw_revalidation"]["skipped"] == "harness_only", result
+          revalidation = json.loads(Path("/tmp/release-bundle/revalidation.json").read_text())
+          assert revalidation["skipped"] == "harness_only", revalidation
           package_dirs = list((Path("/tmp/release-bundle") / "artifacts").glob("nginx-1.30.4-gcc-linux-*"))
           assert len(package_dirs) == 1, package_dirs
           package = package_dirs[0]
