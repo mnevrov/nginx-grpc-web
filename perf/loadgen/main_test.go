@@ -124,6 +124,25 @@ func TestPercentileUsesNearestRankInterpolation(t *testing.T) {
 	}
 }
 
+func TestNewHTTPTransportPreservesCleartextHTTP1Baseline(t *testing.T) {
+	transport, err := newHTTPTransport(config{
+		URL:            "http://127.0.0.1:19080",
+		Streams:        1,
+		TimeoutSeconds: 5,
+	})
+	if err != nil {
+		t.Fatalf("newHTTPTransport: %v", err)
+	}
+	defer transport.CloseIdleConnections()
+
+	if transport.ForceAttemptHTTP2 {
+		t.Fatal("cleartext HTTP/1.1 baseline must not force HTTP/2")
+	}
+	if transport.TLSClientConfig != nil {
+		t.Fatal("cleartext HTTP/1.1 baseline must not install TLS config")
+	}
+}
+
 func TestNewHTTPTransportNegotiatesHTTP2WithCustomCA(t *testing.T) {
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -140,14 +159,20 @@ func TestNewHTTPTransportNegotiatesHTTP2WithCustomCA(t *testing.T) {
 	}
 
 	transport, err := newHTTPTransport(config{
-		Streams:        1,
-		TimeoutSeconds: 5,
-		CAFile:         caFile,
+		URL:             server.URL,
+		Streams:         1,
+		TimeoutSeconds:  5,
+		CAFile:          caFile,
+		RequireHTTP2:    true,
 	})
 	if err != nil {
 		t.Fatalf("newHTTPTransport: %v", err)
 	}
 	defer transport.CloseIdleConnections()
+
+	if !transport.ForceAttemptHTTP2 {
+		t.Fatal("TLS/H2 transport must explicitly attempt HTTP/2")
+	}
 
 	response, err := (&http.Client{Transport: transport}).Get(server.URL)
 	if err != nil {
