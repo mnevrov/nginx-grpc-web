@@ -11,6 +11,8 @@ from grpc_web import decode_text_body, encode_data_frame, parse_trailers
 
 REFERENCE = os.getenv("REFERENCE_URL", "http://127.0.0.1:18081")
 MODULE = os.getenv("MODULE_URL", "http://127.0.0.1:18080")
+MODULE_UNAVAILABLE = os.getenv("MODULE_UNAVAILABLE_URL", "http://127.0.0.1:18082")
+MODULE_TIMEOUT = os.getenv("MODULE_TIMEOUT_URL", "http://127.0.0.1:18084")
 
 
 def varint(value: int) -> bytes:
@@ -189,3 +191,25 @@ def test_nginx_client_disconnect_cancels_upstream():
         time.sleep(0.1)
     else:
         pytest.fail("backend did not observe cancellation after downstream close")
+
+
+def assert_local_error(url: str, expected_status: str, expected_message: str):
+    payload = stream_request(message="proxy-local-error", count=1, delay_ms=500)
+    response, frames = call_stream(url, payload)
+    data, trailers = canonical(response, frames)
+
+    assert data == []
+    assert len(frames) == 1
+    assert frames[0].is_trailer
+    assert trailers["grpc-status"] == expected_status
+    assert trailers["grpc-message"] == expected_message
+
+
+@pytest.mark.integration
+def test_nginx_unavailable_is_grpc_web_terminal_status():
+    assert_local_error(MODULE_UNAVAILABLE, "14", "upstream unavailable")
+
+
+@pytest.mark.integration
+def test_nginx_proxy_timeout_is_grpc_web_terminal_status():
+    assert_local_error(MODULE_TIMEOUT, "4", "upstream timeout")
