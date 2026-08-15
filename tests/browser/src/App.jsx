@@ -37,6 +37,18 @@ export function App() {
       setState(next);
     };
 
+    const currentEvents = () => window.__grpcWebHarness?.events ?? [];
+
+    const fail = (code, message) => {
+      if (terminal) return;
+      terminal = true;
+      publish({
+        status: "error",
+        events: currentEvents(),
+        error: { code: code ?? null, message: message ?? "" },
+      });
+    };
+
     const runUnary = (promise) => {
       promise
         .then((msg) => {
@@ -55,13 +67,7 @@ export function App() {
           });
         })
         .catch((err) => {
-          if (terminal) return;
-          terminal = true;
-          publish({
-            status: "error",
-            events: [],
-            error: { code: err.code ?? null, message: err.message ?? String(err) },
-          });
+          fail(err.code, err.message ?? String(err));
         });
     };
 
@@ -118,13 +124,12 @@ export function App() {
     };
 
     const onError = (err) => {
-      if (terminal) return;
-      terminal = true;
-      publish({
-        status: "error",
-        events: window.__grpcWebHarness?.events ?? [],
-        error: { code: err.code ?? null, message: err.message ?? String(err) },
-      });
+      fail(err.code, err.message ?? String(err));
+    };
+
+    const onStatus = (status) => {
+      if (terminal || !status || status.code === 0) return;
+      fail(status.code, status.details ?? status.message ?? "");
     };
 
     const onEnd = () => {
@@ -139,6 +144,7 @@ export function App() {
 
     stream.on("data", onData);
     stream.on("error", onError);
+    stream.on("status", onStatus);
     stream.on("end", onEnd);
 
     return () => {
