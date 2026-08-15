@@ -86,6 +86,26 @@ def _matches(row: dict[str, Any], *, frontend: str, transport: str, payload_byte
     )
 
 
+def _normalized_metrics(row: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    metrics = dict(raw)
+    runs = int(metrics.get("runs", 0))
+    streams = int(row["streams"])
+    requested = streams * runs
+    errors = int(metrics.get("errors", 0))
+
+    metrics.setdefault("streams_requested", requested)
+    metrics.setdefault("streams_completed", max(requested - errors, 0))
+    metrics.setdefault("error_rate", errors / requested if requested else 1.0)
+
+    wall_seconds = float(metrics.get("wall_seconds", 0.0))
+    cpu_core_seconds = float(metrics.get("cpu_core_seconds", 0.0))
+    metrics.setdefault(
+        "avg_gateway_cores",
+        cpu_core_seconds / wall_seconds if wall_seconds > 0 else 0.0,
+    )
+    return metrics
+
+
 def _architecture_capacity(points: list[dict[str, Any]]) -> dict[str, Any]:
     max_sustainable = 0
     first_failed: int | None = None
@@ -137,9 +157,10 @@ def evaluate_capacity(
     for arch in ("legacy", "native"):
         points: list[dict[str, Any]] = []
         for row in selected:
-            metrics = row.get(arch)
-            if not isinstance(metrics, dict):
+            raw_metrics = row.get(arch)
+            if not isinstance(raw_metrics, dict):
                 raise ValueError(f"missing {arch} metrics at streams={row.get('streams')}")
+            metrics = _normalized_metrics(row, raw_metrics)
             classified = classify_metrics(metrics, slo)
             points.append(
                 {
