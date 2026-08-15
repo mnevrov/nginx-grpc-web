@@ -42,7 +42,7 @@ class DecisionAggregationTests(unittest.TestCase):
             [
                 capacity_result(100, 150),
                 capacity_result(100, 160),
-                capacity_result(110, 160),
+                capacity_result(100, 160),
             ],
             DecisionPolicy(min_repeats=3),
         )
@@ -60,7 +60,7 @@ class DecisionAggregationTests(unittest.TestCase):
 
     def test_unstable_capacity_makes_decision_inconclusive(self):
         result = aggregate_repeats(
-            [capacity_result(50, 100), capacity_result(100, 100), capacity_result(200, 100)],
+            [capacity_result(50, 50), capacity_result(100, 50), capacity_result(200, 50)],
             DecisionPolicy(min_repeats=3, max_capacity_cv=0.20),
         )
         self.assertEqual(result["recommendation"], "inconclusive")
