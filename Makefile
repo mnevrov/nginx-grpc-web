@@ -1,4 +1,4 @@
-.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-capacity-test perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-capacity-smoke perf-h2-capacity-smoke perf-capacity perf-h2-capacity perf-down lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-capacity-test perf-soak-test perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-capacity-smoke perf-h2-capacity-smoke perf-capacity perf-h2-capacity perf-soak-smoke perf-soak perf-down lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
@@ -23,6 +23,7 @@ help:
 	  'make package-module  - export versioned .so from Docker; NGINX_VERSION/BUILD_CC configurable' \
 	  'make perf-loadgen-test - Go loadgen protocol/unit tests' \
 	  'make perf-capacity-test - pure Python SLO/capacity tests' \
+	  'make perf-soak-test  - pure Python soak trend/lifecycle tests' \
 	  'make perf-smoke      - HTTP/1.1 short A/B topology + report validation' \
 	  'make perf-typical    - HTTP/1.1 4 KiB server-stream concurrency A/B' \
 	  'make perf-large      - HTTP/1.1 1/4/8 MiB text+binary A/B sweep' \
@@ -35,6 +36,8 @@ help:
 	  'make perf-h2-capacity-smoke - bounded TLS/H2 SLO staircase harness check' \
 	  'make perf-capacity   - HTTP/1 capacity staircase; requires PERF_CAPACITY_SLO' \
 	  'make perf-h2-capacity - TLS/H2 capacity staircase; requires PERF_CAPACITY_SLO' \
+	  'make perf-soak-smoke - bounded TLS/H2 lifecycle soak harness check' \
+	  'make perf-soak       - strict controlled TLS/H2 soak; requires isolated CPU sets' \
 	  'make perf-down       - stop performance topology' \
 	  'make down            - stop test stack'
 
@@ -126,6 +129,9 @@ perf-loadgen-test:
 perf-capacity-test:
 	python3 perf/test_capacity.py -q
 
+perf-soak-test:
+	python3 perf/test_soak.py -q
+
 perf-smoke:
 	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh smoke
 
@@ -163,6 +169,12 @@ perf-capacity:
 perf-h2-capacity:
 	@test -n "$(PERF_CAPACITY_SLO)" || (echo 'PERF_CAPACITY_SLO=/path/to/slo.json is required' >&2; exit 2)
 	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 PERF_CAPACITY_SLO=$(PERF_CAPACITY_SLO) bash ./perf/run-ab.sh capacity
+
+perf-soak-smoke:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) SOAK_STRICT=0 SOAK_POLICY=perf/scenarios/soak-smoke.json SOAK_DURATION_SECONDS=$${SOAK_DURATION_SECONDS:-8} SOAK_STATS_INTERVAL=$${SOAK_STATS_INTERVAL:-0.10} SOAK_STEADY_STREAMS=$${SOAK_STEADY_STREAMS:-2} SOAK_STEADY_MESSAGES=$${SOAK_STEADY_MESSAGES:-20} SOAK_CHURN_STREAMS=$${SOAK_CHURN_STREAMS:-4} SOAK_CANCEL_STREAMS=$${SOAK_CANCEL_STREAMS:-4} SOAK_RESET_STREAMS=$${SOAK_RESET_STREAMS:-2} SOAK_RESTART_STREAMS=$${SOAK_RESTART_STREAMS:-3} bash ./perf/run-soak.sh
+
+perf-soak:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) SOAK_STRICT=1 bash ./perf/run-soak.sh
 
 perf-down:
 	docker compose -f perf/docker-compose.perf.yml down -v
