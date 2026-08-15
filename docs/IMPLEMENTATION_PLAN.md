@@ -190,7 +190,7 @@ This keeps rollback independent from the frontend and reduces it to routing weig
 
 The first resource sampler used `docker stats`, which produced no samples on very short CI runs. M9 replaced it with host-side cgroup v2 cumulative counters and explicit process RSS sampling. Report generation now fails when a measured run has fewer than two resource samples rather than publishing misleading zero CPU/RSS values.
 
-## M10 — Production-like TLS/HTTP2 performance path
+## M10 — Production-like TLS/HTTP2 performance path ✅
 
 - identical TLS listeners are added to legacy/native front NGINX while preserving the existing cleartext HTTP/1.1 baseline;
 - NGINX enables HTTP/2 through `http2 on;` and the same TLS policy on both paths;
@@ -210,6 +210,29 @@ The first resource sampler used `docker stats`, which produced no samples on ver
 ### M10 interpretation rule
 
 TLS/H2 results are a production-like transport baseline, not literal browser certification. Browser compatibility continues to come from the real React/`grpc-web` Playwright matrix. Performance conclusions must compare legacy/native within the same frontend mode and should be produced on controlled hardware with repeated A/B/B/A runs.
+
+## M11 — Capacity / SLO staircase ✅
+
+- SLO-driven capacity evaluator over existing M9/M10 report data;
+- supported limits: error rate, p99 backend-to-client, p99 TTFD, average gateway cores and peak RSS;
+- capacity defined as the highest contiguous passing concurrency from the lowest staircase level;
+- a later accidental pass after the first failure cannot increase sustainable capacity;
+- A/B/B/A repeated on every concurrency step;
+- automatic early stop when both architectures fail the current SLO step;
+- separate HTTP/1 and TLS/H2 capacity targets;
+- explicit `PERF_CAPACITY_SLO` required for production-style runs;
+- optional equal CPU-set budget through `PERF_GATEWAY_CPUSET`;
+- legacy NGINX + Envoy share that CPU set instead of receiving separate hidden CPU budgets;
+- `capacity.json` + `capacity.md` outputs;
+- CI mechanics gate for both `http1` and `tls-h2`;
+- CI smoke limits intentionally broad and explicitly not production capacity evidence;
+- controlled-host methodology documented in `docs/CAPACITY_BENCHMARKS.md`.
+
+**Exit:** SLO classifier tests green; both HTTP/1 and strict TLS/H2 capacity topology smoke gates green; exact CI matrix green; no production module C behavior changed.
+
+### M11 capacity rule
+
+`max_sustainable_streams` is meaningful only when derived from a monotonic tested staircase under one fixed SLO and resource budget. If `first_failed_streams` is `null`, the capacity boundary was not reached and the staircase must continue. Shared GitHub runner values validate the harness only; architecture claims require controlled-host repeated runs.
 
 ## PR discipline
 
