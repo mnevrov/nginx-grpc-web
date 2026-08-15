@@ -1,0 +1,35 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: tests/backend/Dockerfile
+
+  envoy:
+    image: envoyproxy/envoy:v1.38.0
+    depends_on:
+      - backend
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+
+  native-nginx:
+    build:
+      context: ..
+      dockerfile: docker/nginx/Dockerfile
+      args:
+        NGINX_VERSION: "${NGINX_VERSION:-1.30.4}"
+        BUILD_CC: "${BUILD_CC:-gcc}"
+    depends_on:
+      - backend
+    volumes:
+      - ./nginx-native.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "19080:8080"
+
+  legacy-nginx:
+    image: "nginx:${NGINX_VERSION:-1.30.4}"
+    depends_on:
+      - envoy
+    volumes:
+      - ./nginx-legacy.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "19081:8080"
