@@ -1,4 +1,4 @@
-.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-down lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-capacity-test perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-capacity-smoke perf-h2-capacity-smoke perf-capacity perf-h2-capacity perf-down lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
@@ -22,6 +22,7 @@ help:
 	  'make test-browser    - browser grpc-web tests; BROWSER=chromium|firefox|webkit optional' \
 	  'make package-module  - export versioned .so from Docker; NGINX_VERSION/BUILD_CC configurable' \
 	  'make perf-loadgen-test - Go loadgen protocol/unit tests' \
+	  'make perf-capacity-test - pure Python SLO/capacity tests' \
 	  'make perf-smoke      - HTTP/1.1 short A/B topology + report validation' \
 	  'make perf-typical    - HTTP/1.1 4 KiB server-stream concurrency A/B' \
 	  'make perf-large      - HTTP/1.1 1/4/8 MiB text+binary A/B sweep' \
@@ -30,6 +31,10 @@ help:
 	  'make perf-h2-typical - TLS/HTTP2 4 KiB concurrency A/B' \
 	  'make perf-h2-large   - TLS/HTTP2 1/4/8 MiB text+binary A/B sweep' \
 	  'make perf-h2-slow    - TLS/HTTP2 slow-consumer/backpressure A/B sweep' \
+	  'make perf-capacity-smoke - bounded HTTP/1 SLO staircase harness check' \
+	  'make perf-h2-capacity-smoke - bounded TLS/H2 SLO staircase harness check' \
+	  'make perf-capacity   - HTTP/1 capacity staircase; requires PERF_CAPACITY_SLO' \
+	  'make perf-h2-capacity - TLS/H2 capacity staircase; requires PERF_CAPACITY_SLO' \
 	  'make perf-down       - stop performance topology' \
 	  'make down            - stop test stack'
 
@@ -118,6 +123,9 @@ package-module:
 perf-loadgen-test:
 	cd perf/loadgen && go test ./...
 
+perf-capacity-test:
+	python3 perf/test_capacity.py -q
+
 perf-smoke:
 	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh smoke
 
@@ -141,6 +149,20 @@ perf-h2-large:
 
 perf-h2-slow:
 	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 bash ./perf/run-ab.sh slow
+
+perf-capacity-smoke:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 PERF_CAPACITY_SLO=perf/scenarios/capacity-smoke-slo.json PERF_CAPACITY_STEPS=$${PERF_CAPACITY_STEPS:-1,2} PERF_CAPACITY_MESSAGES=$${PERF_CAPACITY_MESSAGES:-2} PERF_CAPACITY_DELAY_MS=$${PERF_CAPACITY_DELAY_MS:-5} bash ./perf/run-ab.sh capacity
+
+perf-h2-capacity-smoke:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 PERF_CAPACITY_SLO=perf/scenarios/capacity-smoke-slo.json PERF_CAPACITY_STEPS=$${PERF_CAPACITY_STEPS:-1,2} PERF_CAPACITY_MESSAGES=$${PERF_CAPACITY_MESSAGES:-2} PERF_CAPACITY_DELAY_MS=$${PERF_CAPACITY_DELAY_MS:-5} bash ./perf/run-ab.sh capacity
+
+perf-capacity:
+	@test -n "$(PERF_CAPACITY_SLO)" || (echo 'PERF_CAPACITY_SLO=/path/to/slo.json is required' >&2; exit 2)
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 PERF_CAPACITY_SLO=$(PERF_CAPACITY_SLO) bash ./perf/run-ab.sh capacity
+
+perf-h2-capacity:
+	@test -n "$(PERF_CAPACITY_SLO)" || (echo 'PERF_CAPACITY_SLO=/path/to/slo.json is required' >&2; exit 2)
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 PERF_CAPACITY_SLO=$(PERF_CAPACITY_SLO) bash ./perf/run-ab.sh capacity
 
 perf-down:
 	docker compose -f perf/docker-compose.perf.yml down -v

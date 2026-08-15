@@ -11,6 +11,7 @@ KEEP_STACK=${KEEP_STACK:-0}
 NGINX_VERSION=${NGINX_VERSION:-1.30.4}
 BUILD_CC=${BUILD_CC:-gcc}
 CERT_DIR="$ROOT/perf/.certs"
+CAPACITY_MODE=0
 
 mkdir -p "$ROOT/build" "$OUTPUT_DIR"
 
@@ -26,6 +27,7 @@ trap cleanup EXIT INT TERM
   go test ./...
   go build -trimpath -o "$LOADGEN" .
 )
+python3 "$ROOT/perf/test_capacity.py" -q
 
 bash "$ROOT/perf/generate-tls.sh" "$CERT_DIR"
 
@@ -46,6 +48,29 @@ for url in http://127.0.0.1:19080/ http://127.0.0.1:19081/; do
     exit 1
   fi
 done
+
+apply_cpuset() {
+  local service=$1
+  local cpuset=$2
+  local container
+  container=$(docker compose -f "$COMPOSE" ps -q "$service")
+  if [[ -z "$container" ]]; then
+    echo "cannot resolve container for CPU pinning: $service" >&2
+    exit 1
+  fi
+  docker update --cpuset-cpus "$cpuset" "$container" >/dev/null
+}
+
+if [[ -n "${PERF_GATEWAY_CPUSET:-}" ]]; then
+  # Both architectures receive the same CPU set. Legacy NGINX and Envoy share
+  # that set, so the legacy path does not silently get twice the CPU budget.
+  apply_cpuset native-nginx "$PERF_GATEWAY_CPUSET"
+  apply_cpuset legacy-nginx "$PERF_GATEWAY_CPUSET"
+  apply_cpuset envoy "$PERF_GATEWAY_CPUSET"
+fi
+if [[ -n "${PERF_BACKEND_CPUSET:-}" ]]; then
+  apply_cpuset backend "$PERF_BACKEND_CPUSET"
+fi
 
 case "$FRONTEND" in
   http1)
@@ -69,42 +94,12 @@ case "$FRONTEND" in
     ;;
 esac
 
-print_loadgen_errors() {
-  local result=$1
-  python3 - "$result" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-if not path.exists():
-    print(f"loadgen produced no JSON diagnostics: {path}", file=sys.stderr)
-    raise SystemExit(0)
-
-data = json.loads(path.read_text())
-for stream in data.get("streams", []):
-    if stream.get("error"):
-        print(
-            "stream {id}: {error}; http={http}; protocol={proto}; alpn={alpn}".format(
-                id=stream.get("id"),
-                error=stream.get("error"),
-                http=stream.get("http_status", ""),
-                proto=stream.get("http_protocol", ""),
-                alpn=stream.get("tls_alpn", ""),
-            ),
-            file=sys.stderr,
-        )
-PY
-}
-
 # Warm both gateway paths and the common backend before any measured run.
-# Successful warmups are deleted. A failing warmup keeps its JSON result and
-# prints per-stream errors so CI failures are actionable without another run.
+# Retain warmup JSON on failure so CI shows the exact per-stream error.
 warm_index=0
 for warm_url in "$native_url" "$legacy_url"; do
   warm_index=$((warm_index + 1))
-  warm_result="$OUTPUT_DIR/warmup-${FRONTEND}-${warm_index}.json"
-
+  warm_result="$OUTPUT_DIR/000-warmup-${FRONTEND}-${warm_index}.json"
   set +e
   "$LOADGEN" \
     -name warmup \
@@ -119,13 +114,25 @@ for warm_url in "$native_url" "$legacy_url"; do
     -output "$warm_result"
   warm_rc=$?
   set -e
-
   if [[ "$warm_rc" != "0" ]]; then
-    echo "warmup failed: frontend=$FRONTEND url=$warm_url" >&2
-    print_loadgen_errors "$warm_result"
+    python3 - "$warm_result" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if path.exists():
+    data = json.loads(path.read_text())
+    for stream in data.get("streams", []):
+        if stream.get("error"):
+            print(
+                f"warmup stream={stream.get('id')} error={stream.get('error')} "
+                f"http={stream.get('http_protocol', '')} alpn={stream.get('tls_alpn', '')}",
+                file=sys.stderr,
+            )
+PY
     exit "$warm_rc"
   fi
-  rm -f "$warm_result"
 done
 
 case_index=0
@@ -165,9 +172,6 @@ run_one() {
   bash "$ROOT/perf/sample-stats.sh" "$COMPOSE" "$stats" "${services[@]}" &
   local sampler=$!
 
-  # Do not start the measured request until the sampler has produced its first
-  # baseline row. This makes cumulative CPU deltas deterministic even for a
-  # very short CI smoke run.
   local stats_ready=0
   for _ in $(seq 1 50); do
     if ! kill -0 "$sampler" >/dev/null 2>&1; then
@@ -202,16 +206,12 @@ run_one() {
   local rc=$?
   set -e
 
-  # Let the sampler observe a post-run cumulative CPU value and final memory
-  # point before termination. The small idle tail has negligible CPU cost but
-  # prevents short runs from collapsing to one sample.
   sleep "${PERF_STATS_SETTLE:-0.15}"
   kill "$sampler" >/dev/null 2>&1 || true
   wait "$sampler" >/dev/null 2>&1 || true
 
   if [[ "$rc" != "0" ]]; then
     echo "loadgen failed: $stem" >&2
-    print_loadgen_errors "$result"
     return "$rc"
   fi
 }
@@ -222,6 +222,31 @@ run_abba() {
   run_one legacy "$transport" "$payload" "$streams" "$messages" "$delay" "$consumer_delay" B1
   run_one legacy "$transport" "$payload" "$streams" "$messages" "$delay" "$consumer_delay" B2
   run_one native "$transport" "$payload" "$streams" "$messages" "$delay" "$consumer_delay" A2
+}
+
+capacity_report() {
+  local probe_streams=${1:-}
+  python3 "$ROOT/perf/report.py" --input "$OUTPUT_DIR" --output "$OUTPUT_DIR/report.md" --json-output "$OUTPUT_DIR/report.json"
+
+  local args=(
+    --report "$OUTPUT_DIR/report.json"
+    --slo "$PERF_CAPACITY_SLO"
+    --output "$OUTPUT_DIR/capacity.json"
+    --markdown "$OUTPUT_DIR/capacity.md"
+    --frontend "$FRONTEND"
+    --transport "$PERF_CAPACITY_TRANSPORT"
+    --payload-bytes "$PERF_CAPACITY_PAYLOAD_BYTES"
+    --messages "$PERF_CAPACITY_MESSAGES"
+    --delay-ms "$PERF_CAPACITY_DELAY_MS"
+    --consumer-delay-ms "$PERF_CAPACITY_CONSUMER_DELAY_MS"
+  )
+  if [[ -n "${PERF_GATEWAY_CPUSET:-}" ]]; then
+    args+=(--gateway-cpuset "$PERF_GATEWAY_CPUSET")
+  fi
+  if [[ -n "$probe_streams" ]]; then
+    args+=(--probe-streams "$probe_streams" --exit-both-failed)
+  fi
+  python3 "$ROOT/perf/capacity.py" "${args[@]}"
 }
 
 case "$PROFILE" in
@@ -250,13 +275,63 @@ case "$PROFILE" in
       done
     done
     ;;
+  capacity)
+    CAPACITY_MODE=1
+    PERF_CAPACITY_SLO=${PERF_CAPACITY_SLO:-"$ROOT/perf/scenarios/capacity-smoke-slo.json"}
+    PERF_CAPACITY_STEPS=${PERF_CAPACITY_STEPS:-"10,25,50,100,200,400"}
+    PERF_CAPACITY_TRANSPORT=${PERF_CAPACITY_TRANSPORT:-text}
+    PERF_CAPACITY_PAYLOAD_BYTES=${PERF_CAPACITY_PAYLOAD_BYTES:-4096}
+    PERF_CAPACITY_MESSAGES=${PERF_CAPACITY_MESSAGES:-20}
+    PERF_CAPACITY_DELAY_MS=${PERF_CAPACITY_DELAY_MS:-20}
+    PERF_CAPACITY_CONSUMER_DELAY_MS=${PERF_CAPACITY_CONSUMER_DELAY_MS:-0}
+
+    if [[ ! -f "$PERF_CAPACITY_SLO" ]]; then
+      echo "capacity SLO file not found: $PERF_CAPACITY_SLO" >&2
+      exit 2
+    fi
+
+    IFS=',' read -r -a capacity_steps <<< "$PERF_CAPACITY_STEPS"
+    previous=0
+    for streams in "${capacity_steps[@]}"; do
+      if [[ ! "$streams" =~ ^[1-9][0-9]*$ ]] || (( streams <= previous )); then
+        echo "PERF_CAPACITY_STEPS must be strictly increasing positive integers: $PERF_CAPACITY_STEPS" >&2
+        exit 2
+      fi
+      previous=$streams
+      run_abba \
+        "$PERF_CAPACITY_TRANSPORT" \
+        "$PERF_CAPACITY_PAYLOAD_BYTES" \
+        "$streams" \
+        "$PERF_CAPACITY_MESSAGES" \
+        "$PERF_CAPACITY_DELAY_MS" \
+        "$PERF_CAPACITY_CONSUMER_DELAY_MS"
+
+      set +e
+      capacity_report "$streams"
+      capacity_rc=$?
+      set -e
+      if [[ "$capacity_rc" == "3" ]]; then
+        echo "capacity staircase stop: both architectures failed SLO at streams=$streams"
+        break
+      fi
+      if [[ "$capacity_rc" != "0" ]]; then
+        exit "$capacity_rc"
+      fi
+    done
+    ;;
   *)
-    echo "profile must be one of: smoke, typical, large, slow" >&2
+    echo "profile must be one of: smoke, typical, large, slow, capacity" >&2
     exit 2
     ;;
 esac
 
 python3 "$ROOT/perf/report.py" --input "$OUTPUT_DIR" --output "$OUTPUT_DIR/report.md" --json-output "$OUTPUT_DIR/report.json"
+if [[ "$CAPACITY_MODE" == "1" ]]; then
+  capacity_report
+fi
 printf 'frontend: %s\n' "$FRONTEND"
 printf 'results:  %s\n' "$OUTPUT_DIR"
 printf 'report:   %s\n' "$OUTPUT_DIR/report.md"
+if [[ "$CAPACITY_MODE" == "1" ]]; then
+  printf 'capacity: %s\n' "$OUTPUT_DIR/capacity.md"
+fi

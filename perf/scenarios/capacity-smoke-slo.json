@@ -1,0 +1,7 @@
+{
+  "max_error_rate": 0.0,
+  "max_p99_backend_to_client_ms": 10000.0,
+  "max_p99_ttfd_ms": 10000.0,
+  "max_avg_gateway_cores": 64.0,
+  "max_peak_rss_mib": 4096.0
+}
