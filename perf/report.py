@@ -27,43 +27,43 @@ def percentile(values: list[float], q: float) -> float:
     return values[lo] + (values[hi] - values[lo]) * frac
 
 
-def memory_to_mib(value: str) -> float:
-    token = value.split("/", 1)[0].strip()
-    units = {
-        "B": 1 / MIB,
-        "KiB": 1 / 1024,
-        "MiB": 1,
-        "GiB": 1024,
-        "TiB": 1024 * 1024,
-        "kB": 1000 / MIB,
-        "MB": 1000 * 1000 / MIB,
-        "GB": 1000 * 1000 * 1000 / MIB,
-    }
-    for unit in sorted(units, key=len, reverse=True):
-        if token.endswith(unit):
-            return float(token[: -len(unit)].strip()) * units[unit]
-    raise ValueError(f"unsupported docker memory value: {value!r}")
-
-
 def read_stats(path: Path) -> dict[str, float]:
     if not path.exists():
-        return {"avg_cpu_percent": 0.0, "peak_rss_mib": 0.0, "samples": 0}
+        raise RuntimeError(f"missing gateway stats file: {path}")
 
-    cpu_by_timestamp: dict[str, float] = defaultdict(float)
-    mem_by_timestamp: dict[str, float] = defaultdict(float)
+    cpu_by_container: dict[str, list[int]] = defaultdict(list)
+    mem_by_timestamp: dict[str, int] = defaultdict(int)
+
     with path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle, delimiter="\t"):
             ts = row["timestamp"]
-            cpu_by_timestamp[ts] += float(row["cpu_percent"].rstrip("%"))
-            mem_by_timestamp[ts] += memory_to_mib(row["memory"])
+            container = row["container"]
+            cpu_by_container[container].append(int(row["cpu_usage_usec"]))
+            mem_by_timestamp[ts] += int(row["memory_bytes"])
 
-    if not cpu_by_timestamp:
-        return {"avg_cpu_percent": 0.0, "peak_rss_mib": 0.0, "samples": 0}
+    samples = len(mem_by_timestamp)
+    if samples < 2:
+        raise RuntimeError(
+            f"gateway stats need at least two cgroup samples, got {samples}: {path}"
+        )
+
+    cpu_core_seconds = 0.0
+    for container, values in cpu_by_container.items():
+        if len(values) < 2:
+            raise RuntimeError(
+                f"gateway stats need two CPU samples for {container}: {path}"
+            )
+        delta_usec = values[-1] - values[0]
+        if delta_usec < 0:
+            raise RuntimeError(
+                f"cgroup CPU counter moved backwards for {container}: {path}"
+            )
+        cpu_core_seconds += delta_usec / 1_000_000.0
 
     return {
-        "avg_cpu_percent": sum(cpu_by_timestamp.values()) / len(cpu_by_timestamp),
-        "peak_rss_mib": max(mem_by_timestamp.values()),
-        "samples": len(cpu_by_timestamp),
+        "cpu_core_seconds": cpu_core_seconds,
+        "peak_rss_mib": max(mem_by_timestamp.values()) / MIB,
+        "samples": samples,
     }
 
 
@@ -103,7 +103,7 @@ def aggregate(runs: list[dict]) -> dict:
         wire_bytes += int(summary["wire_bytes"])
         data_frames += int(summary["data_frames"])
         errors += int(summary["errors"])
-        cpu_core_seconds += stats["avg_cpu_percent"] / 100.0 * wall
+        cpu_core_seconds += stats["cpu_core_seconds"]
         peak_rss_mib = max(peak_rss_mib, stats["peak_rss_mib"])
         stats_samples += int(stats["samples"])
 
@@ -160,7 +160,7 @@ def main() -> None:
 
     grouped: dict[tuple, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     for path in sorted(args.input.glob("*.json")):
-        if path.name in {"report.json"}:
+        if path.name == "report.json":
             continue
         data = json.loads(path.read_text(encoding="utf-8"))
         if "config" not in data or "summary" not in data:
@@ -264,7 +264,9 @@ def main() -> None:
             "",
             "The `backend→client` metric uses a backend-relative timestamp taken immediately before `grpc.aio` yields each response. It includes protobuf serialization/native gRPC transport plus gateway/downstream delivery; because the backend is identical for both paths, the A/B delta is the useful signal.",
             "",
-            "Docker CPU is sampled and integrated approximately as `average CPU% / 100 × wall seconds`; use a dedicated host and longer measurement windows for release-quality CPU/GiB numbers.",
+            "Gateway CPU is measured from cgroup v2 cumulative `usage_usec` before/through/after each measured run. Legacy CPU is the sum of front NGINX + Envoy; native CPU is the NGINX(module) cgroup. Peak RSS is the maximum sampled sum of the same gateway containers.",
+            "",
+            "Use a dedicated host and longer A/B/B/A measurement windows for release-quality CPU/GiB and latency conclusions. The GitHub Actions smoke result validates the harness only.",
             "",
         ]
     )
