@@ -5,6 +5,7 @@
  * M2 implements binary unary request/response adaptation.
  * M3 adds incremental grpc-web-text request decoding.
  * M4 adds grpc-web-text unary response framing/base64 encoding.
+ * M5 validates incremental server streaming and bounded buffer reuse.
  */
 
 #include <ngx_config.h>
@@ -32,6 +33,8 @@ typedef struct {
     grpc_web_frame_parser_t response_frame;
     ngx_buf_t *response_frame_buf;
     size_t decoded_request_size;
+    ngx_chain_t *response_free;
+    ngx_chain_t *response_busy;
     unsigned active:1;
     unsigned text_response:1;
     unsigned transform_response:1;
@@ -62,9 +65,14 @@ static ngx_int_t ngx_http_grpc_web_decode_text_request(
     ngx_chain_t *in, ngx_chain_t **out);
 static ngx_chain_t *ngx_http_grpc_web_build_trailer_frame(
     ngx_http_request_t *r);
+static ngx_int_t ngx_http_grpc_web_reserve_temp_buf(
+    ngx_http_request_t *r, ngx_buf_t *b, size_t required);
+static ngx_int_t ngx_http_grpc_web_prepare_response_frame_buf(
+    ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx, size_t required);
 static ngx_chain_t *ngx_http_grpc_web_encode_text_block(
-    ngx_http_request_t *r, const u_char *src, size_t src_len,
-    ngx_flag_t flush, ngx_flag_t last_buf);
+    ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
+    const u_char *src, size_t src_len, ngx_flag_t flush,
+    ngx_flag_t last_buf);
 static ngx_int_t ngx_http_grpc_web_encode_text_response(
     ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
     ngx_chain_t *in, ngx_chain_t **out);
@@ -663,12 +671,72 @@ ngx_http_grpc_web_build_trailer_frame(ngx_http_request_t *r)
     return cl;
 }
 
+static ngx_int_t
+ngx_http_grpc_web_reserve_temp_buf(ngx_http_request_t *r, ngx_buf_t *b,
+    size_t required)
+{
+    size_t current, capacity;
+    u_char *p;
+
+    current = 0;
+    if (b->start != NULL && b->end != NULL && b->end >= b->start) {
+        current = (size_t) (b->end - b->start);
+    }
+
+    if (current < required) {
+        capacity = current == 0 ? 1024 : current;
+
+        while (capacity < required) {
+            if (capacity > NGX_MAX_SIZE_T_VALUE / 2) {
+                capacity = required;
+                break;
+            }
+            capacity *= 2;
+        }
+
+        p = ngx_palloc(r->pool, capacity);
+        if (p == NULL) {
+            return NGX_ERROR;
+        }
+
+        b->start = p;
+        b->end = p + capacity;
+    }
+
+    b->pos = b->start;
+    b->last = b->start;
+    return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_grpc_web_prepare_response_frame_buf(ngx_http_request_t *r,
+    ngx_http_grpc_web_ctx_t *ctx, size_t required)
+{
+    if (ctx->response_frame_buf == NULL) {
+        ctx->response_frame_buf = ngx_calloc_buf(r->pool);
+        if (ctx->response_frame_buf == NULL) {
+            return NGX_ERROR;
+        }
+    }
+
+    if (ngx_http_grpc_web_reserve_temp_buf(
+            r, ctx->response_frame_buf, required) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+
+    ctx->response_frame_buf->temporary = 1;
+    return NGX_OK;
+}
+
 static ngx_chain_t *
 ngx_http_grpc_web_encode_text_block(ngx_http_request_t *r,
-    const u_char *src, size_t src_len, ngx_flag_t flush, ngx_flag_t last_buf)
+    ngx_http_grpc_web_ctx_t *ctx, const u_char *src, size_t src_len,
+    ngx_flag_t flush, ngx_flag_t last_buf)
 {
     int rc;
     size_t groups, cap, written;
+    u_char *start, *end;
     ngx_buf_t *b;
     ngx_chain_t *cl;
     grpc_web_b64_encoder_t encoder;
@@ -683,10 +751,27 @@ ngx_http_grpc_web_encode_text_block(ngx_http_request_t *r,
     }
     cap = groups * 4;
 
-    b = ngx_create_temp_buf(r->pool, cap == 0 ? 1 : cap);
-    if (b == NULL) {
+    cl = ngx_chain_get_free_buf(r->pool, &ctx->response_free);
+    if (cl == NULL) {
         return NGX_CHAIN_ERROR;
     }
+
+    b = cl->buf;
+    if (ngx_http_grpc_web_reserve_temp_buf(r, b, cap == 0 ? 1 : cap)
+        != NGX_OK)
+    {
+        return NGX_CHAIN_ERROR;
+    }
+
+    start = b->start;
+    end = b->end;
+    ngx_memzero(b, sizeof(ngx_buf_t));
+    b->start = start;
+    b->end = end;
+    b->pos = start;
+    b->last = start;
+    b->tag = (ngx_buf_tag_t) &ngx_http_grpc_web_module;
+    b->temporary = 1;
 
     grpc_web_b64_encoder_init(&encoder);
     written = 0;
@@ -703,12 +788,6 @@ ngx_http_grpc_web_encode_text_block(ngx_http_request_t *r,
     b->last_buf = last_buf;
     b->last_in_chain = last_buf;
 
-    cl = ngx_alloc_chain_link(r->pool);
-    if (cl == NULL) {
-        return NGX_CHAIN_ERROR;
-    }
-
-    cl->buf = b;
     cl->next = NULL;
     return cl;
 }
@@ -769,8 +848,9 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
                 }
 
                 frame_size = (size_t) frame_size64;
-                ctx->response_frame_buf = ngx_create_temp_buf(r->pool, frame_size);
-                if (ctx->response_frame_buf == NULL) {
+                if (ngx_http_grpc_web_prepare_response_frame_buf(
+                        r, ctx, frame_size) != NGX_OK)
+                {
                     return NGX_ERROR;
                 }
 
@@ -780,7 +860,7 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
                     GRPC_WEB_FRAME_HEADER_SIZE);
 
                 if (grpc_web_frame_is_complete(&ctx->response_frame)) {
-                    encoded = ngx_http_grpc_web_encode_text_block(r,
+                    encoded = ngx_http_grpc_web_encode_text_block(r, ctx,
                         ctx->response_frame_buf->pos,
                         (size_t) (ctx->response_frame_buf->last
                                   - ctx->response_frame_buf->pos),
@@ -791,7 +871,8 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
 
                     *ll = encoded;
                     ll = &encoded->next;
-                    ctx->response_frame_buf = NULL;
+                    ctx->response_frame_buf->pos = ctx->response_frame_buf->start;
+                    ctx->response_frame_buf->last = ctx->response_frame_buf->start;
                     grpc_web_frame_next(&ctx->response_frame);
                 }
 
@@ -812,7 +893,7 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
             b->pos += n;
 
             if (grpc_web_frame_is_complete(&ctx->response_frame)) {
-                encoded = ngx_http_grpc_web_encode_text_block(r,
+                encoded = ngx_http_grpc_web_encode_text_block(r, ctx,
                     ctx->response_frame_buf->pos,
                     (size_t) (ctx->response_frame_buf->last
                               - ctx->response_frame_buf->pos),
@@ -823,7 +904,8 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
 
                 *ll = encoded;
                 ll = &encoded->next;
-                ctx->response_frame_buf = NULL;
+                ctx->response_frame_buf->pos = ctx->response_frame_buf->start;
+                ctx->response_frame_buf->last = ctx->response_frame_buf->start;
                 grpc_web_frame_next(&ctx->response_frame);
             }
         }
@@ -837,8 +919,7 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
         }
 
         if (ctx->response_frame.header_len != 0
-            || ctx->response_frame.header_ready
-            || ctx->response_frame_buf != NULL)
+            || ctx->response_frame.header_ready)
         {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                           "grpc-web incomplete native response frame at EOF");
@@ -850,7 +931,7 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
             return NGX_ERROR;
         }
 
-        encoded = ngx_http_grpc_web_encode_text_block(r,
+        encoded = ngx_http_grpc_web_encode_text_block(r, ctx,
             trailers->buf->pos,
             (size_t) (trailers->buf->last - trailers->buf->pos),
             1, 1);
@@ -891,10 +972,21 @@ ngx_http_grpc_web_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
         }
 
         if (out == NULL) {
+            ngx_chain_update_chains(r->pool,
+                                    &ctx->response_free,
+                                    &ctx->response_busy,
+                                    &out,
+                                    (ngx_buf_tag_t) &ngx_http_grpc_web_module);
             return NGX_OK;
         }
 
-        return ngx_http_grpc_web_next_body_filter(r, out);
+        rc = ngx_http_grpc_web_next_body_filter(r, out);
+        ngx_chain_update_chains(r->pool,
+                                &ctx->response_free,
+                                &ctx->response_busy,
+                                &out,
+                                (ngx_buf_tag_t) &ngx_http_grpc_web_module);
+        return rc;
     }
 
     last = NULL;
