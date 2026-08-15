@@ -40,6 +40,22 @@ cp "$RELEASE_GATES" "$RELEASE_OUTPUT_DIR/gates.json"
 cp -a "$RELEASE_CONTROLLED_DIR"/. "$RELEASE_OUTPUT_DIR/controlled/"
 cp -a "$RELEASE_SOAK_DIR"/. "$RELEASE_OUTPUT_DIR/soak/"
 
+if [[ "$RELEASE_ALLOW_INCONCLUSIVE" == "0" ]]; then
+  python3 "$ROOT/release/revalidate.py" \
+    --repo-root "$ROOT" \
+    --controlled-dir "$RELEASE_OUTPUT_DIR/controlled" \
+    --soak-dir "$RELEASE_OUTPUT_DIR/soak" \
+    --output "$RELEASE_OUTPUT_DIR/revalidation.json"
+else
+  cat > "$RELEASE_OUTPUT_DIR/revalidation.json" <<'EOF'
+{
+  "version": 1,
+  "valid": null,
+  "skipped": "harness_only"
+}
+EOF
+fi
+
 OUT_ROOT="$RELEASE_OUTPUT_DIR/artifacts" \
 NGINX_VERSION="$NGINX_VERSION" \
 BUILD_CC="$BUILD_CC" \
