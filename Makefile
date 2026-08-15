@@ -1,11 +1,16 @@
-.PHONY: help unit reference-up module-up down test-reference test-module test-diff test-browser lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
+FUZZ_CC ?= clang
+FUZZ_CFLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -Wall -Wextra -Werror
+SANITIZER_CFLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Werror
 
 help:
 	@printf '%s\n' \
 	  'make unit            - pure C + Python codec tests' \
+	  'make sanitizers      - pure C tests under ASAN/UBSAN' \
+	  'make fuzz-smoke      - bounded libFuzzer smoke for C state machines' \
 	  'make reference-up    - backend + Envoy oracle' \
 	  'make module-up       - backend + NGINX module' \
 	  'make test-reference  - Envoy integration baseline' \
@@ -26,6 +31,25 @@ unit: build/unit-base64 build/unit-frame
 	./build/unit-base64
 	./build/unit-frame
 	python3 -m pytest -q tests/protocol/test_codec.py
+
+sanitizers:
+	@mkdir -p build/sanitizers
+	$(CC) $(SANITIZER_CFLAGS) -Isrc tests/unit/test_base64.c src/grpc_web_base64.c -o build/sanitizers/unit-base64
+	$(CC) $(SANITIZER_CFLAGS) -Isrc tests/unit/test_frame.c src/grpc_web_frame.c -o build/sanitizers/unit-frame
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./build/sanitizers/unit-base64
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./build/sanitizers/unit-frame
+
+build/fuzz-base64:
+	@mkdir -p build
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -Isrc tests/fuzz/fuzz_base64.c src/grpc_web_base64.c -o $@
+
+build/fuzz-frame:
+	@mkdir -p build
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -Isrc tests/fuzz/fuzz_frame.c src/grpc_web_frame.c -o $@
+
+fuzz-smoke: build/fuzz-base64 build/fuzz-frame
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./build/fuzz-base64 -runs=20000 -max_len=512
+	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ./build/fuzz-frame -runs=20000 -max_len=512
 
 reference-up:
 	docker compose up -d --build backend envoy
