@@ -1,4 +1,4 @@
-.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-smoke perf-typical perf-large perf-slow perf-down lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
@@ -21,6 +21,12 @@ help:
 	  'make test-diff       - Envoy vs NGINX implemented differential tests' \
 	  'make test-browser    - browser grpc-web tests; BROWSER=chromium|firefox|webkit optional' \
 	  'make package-module  - export versioned .so from Docker; NGINX_VERSION/BUILD_CC configurable' \
+	  'make perf-loadgen-test - Go loadgen protocol/unit tests' \
+	  'make perf-smoke      - short A/B topology + report validation' \
+	  'make perf-typical    - 4 KiB server-stream concurrency A/B' \
+	  'make perf-large      - 1/4/8 MiB text+binary A/B sweep' \
+	  'make perf-slow       - slow-consumer/backpressure A/B sweep' \
+	  'make perf-down       - stop performance topology' \
 	  'make down            - stop test stack'
 
 build/unit-base64:
@@ -104,3 +110,21 @@ test-browser:
 
 package-module:
 	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./scripts/package-module.sh
+
+perf-loadgen-test:
+	cd perf/loadgen && go test ./...
+
+perf-smoke:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh smoke
+
+perf-typical:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh typical
+
+perf-large:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh large
+
+perf-slow:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh slow
+
+perf-down:
+	docker compose -f perf/docker-compose.perf.yml down -v

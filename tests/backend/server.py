@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 
 import grpc
@@ -64,6 +65,7 @@ class TestService(test_pb2_grpc.TestServiceServicer):
             return
 
         context.set_trailing_metadata((("x-test-trailer", "stream-ok"),))
+        stream_started_ns = time.perf_counter_ns()
 
         try:
             for i in range(count):
@@ -72,9 +74,19 @@ class TestService(test_pb2_grpc.TestServiceServicer):
                     return
 
                 await asyncio.sleep(delay)
+                server_elapsed_ns = 0
+                if request.include_server_timing:
+                    # This timestamp is taken immediately before yielding the
+                    # response object to grpc.aio. The resulting client metric
+                    # therefore includes protobuf serialization + native gRPC
+                    # transport + gateway + downstream delivery. A/B uses the
+                    # same backend path, so the delta isolates gateway cost.
+                    server_elapsed_ns = time.perf_counter_ns() - stream_started_ns
+
                 yield test_pb2.EchoReply(
                     message=message,
                     sequence=i + 1,
+                    server_elapsed_ns=server_elapsed_ns,
                 )
 
                 if request.fail_after and i + 1 >= request.fail_after:
