@@ -28,7 +28,7 @@ Envoy используется в тестовом стенде как **referen
 
 - распознавание gRPC-Web media types;
 - преобразование request headers;
-- incremental base64 decode для `grpc-web-text`;
+- incremental Base64 decode для `grpc-web-text`;
 - passthrough binary gRPC-Web request body;
 - преобразование response headers;
 - incremental response transformation;
@@ -85,13 +85,13 @@ make reference-up
 make test-reference
 ```
 
-Для уже реализованных M2/M3 путей:
+Для реализованных M2–M4 путей:
 
 ```bash
 # backend + NGINX module
 make module-up
 
-# binary unary + grpc-web-text request-side integration
+# binary unary + grpc-web-text request/response integration
 make test-module
 
 # canonical Envoy ↔ NGINX comparison
@@ -99,8 +99,8 @@ make test-module
 make reference-up
 make test-diff
 
-# browser regression: M2 binary path + Envoy text reference;
-# NGINX text-mode browser path включается в M4
+# real React/grpc-web client in Chromium:
+# binary unary + text unary success/error against Envoy and NGINX
 make test-browser
 ```
 
@@ -127,7 +127,7 @@ AGENTS.md              обязательные правила для агент
 
 ## Принцип oracle
 
-Envoy считается reference implementation для наблюдаемого поведения, но тесты не должны требовать бессмысленного byte-for-byte совпадения base64 chunk boundaries.
+Envoy считается reference implementation для наблюдаемого поведения, но тесты не должны требовать бессмысленного byte-for-byte совпадения Base64 chunk boundaries.
 
 Сравнивается **каноническая семантика**:
 
@@ -162,4 +162,29 @@ M3 реализует request-side `grpc-web-text`:
 - malformed/incomplete Base64 отклоняется с `400`;
 - fragmentation и request semantics сверяются с Envoy.
 
-Полноценный `grpc-web-text` unary end-to-end пока **не считается реализованным**: M4 должен добавить response-side Base64 encoding и text trailer frame, после чего тот же React-клиент будет включён против NGINX text endpoint.
+M4 завершает `grpc-web-text` unary end-to-end:
+
+- response text mode выбирается по `Accept: application/grpc-web-text[+proto]`, независимо от request `Content-Type`;
+- native gRPC frame может пересекать произвольное число NGINX upstream buffers;
+- модуль буферизует только текущий gRPC frame, а не весь HTTP response;
+- каждый завершённый native gRPC frame Base64-кодируется отдельно;
+- native trailers преобразуются в `0x80 | uint32 length | CRLF trailer block`, после чего Base64-кодируются отдельным terminal block;
+- `grpc-status`, `grpc-message` и trailing metadata сохраняются;
+- локальные HTTP-ошибки NGINX не пропускаются через native-gRPC response parser;
+- upstream trailers-only `HEADERS+END_STREAM` поддерживается отдельно: stock `ngx_http_grpc_module` представляет такой status как обычные response headers, поэтому модуль сохраняет пустой body и только переписывает media type;
+- большой unary response проверяется с `grpc_buffer_size 1k`, чтобы один native frame гарантированно пересекал несколько upstream buffers;
+- успешный text unary и non-zero gRPC status/message проходят через тот же реальный React/`grpc-web` клиент против Envoy и NGINX.
+
+### Последняя M4 валидация
+
+Функциональный M4 head прошёл:
+
+- unit tests — ✅;
+- dynamic module build на NGINX 1.30.2 — ✅;
+- dynamic module build на NGINX 1.31.1 — ✅;
+- Envoy reference — `2 passed`;
+- NGINX module integration — `13 passed`;
+- Envoy ↔ NGINX differential — `4 passed`;
+- React/`grpc-web`/Chromium — `7 passed`.
+
+Следующий milestone — **M5: server streaming**. Его критерий готовности — первое сообщение должно доходить до браузера до завершения stream; полная буферизация ответа недопустима.

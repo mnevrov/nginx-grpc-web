@@ -3,8 +3,8 @@
  *
  * Minimal gRPC-Web protocol adapter layered in front of ngx_http_grpc_module.
  * M2 implements binary unary request/response adaptation.
- * M3 adds incremental grpc-web-text request decoding while response text
- * encoding intentionally remains deferred to M4.
+ * M3 adds incremental grpc-web-text request decoding.
+ * M4 adds grpc-web-text unary response framing/base64 encoding.
  */
 
 #include <ngx_config.h>
@@ -29,10 +29,12 @@ typedef struct {
     ngx_grpc_web_mode_e mode;
     ngx_str_t downstream_content_type;
     grpc_web_b64_decoder_t request_decoder;
-    grpc_web_b64_encoder_t response_encoder;
     grpc_web_frame_parser_t response_frame;
+    ngx_buf_t *response_frame_buf;
     size_t decoded_request_size;
     unsigned active:1;
+    unsigned text_response:1;
+    unsigned transform_response:1;
     unsigned request_finished:1;
     unsigned trailers_sent:1;
 } ngx_http_grpc_web_ctx_t;
@@ -50,11 +52,22 @@ static ngx_int_t ngx_http_grpc_web_body_filter(ngx_http_request_t *r,
     ngx_chain_t *in);
 
 static ngx_int_t ngx_http_grpc_web_ensure_te(ngx_http_request_t *r);
+static ngx_flag_t ngx_http_grpc_web_accepts_text(ngx_http_request_t *r);
+static ngx_flag_t ngx_http_grpc_web_is_native_grpc_response(
+    ngx_http_request_t *r);
+static ngx_flag_t ngx_http_grpc_web_has_response_header(
+    ngx_http_request_t *r, const char *name, size_t len);
 static ngx_int_t ngx_http_grpc_web_decode_text_request(
     ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
     ngx_chain_t *in, ngx_chain_t **out);
 static ngx_chain_t *ngx_http_grpc_web_build_trailer_frame(
     ngx_http_request_t *r);
+static ngx_chain_t *ngx_http_grpc_web_encode_text_block(
+    ngx_http_request_t *r, const u_char *src, size_t src_len,
+    ngx_flag_t flush, ngx_flag_t last_buf);
+static ngx_int_t ngx_http_grpc_web_encode_text_response(
+    ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
+    ngx_chain_t *in, ngx_chain_t **out);
 
 static ngx_http_request_body_filter_pt ngx_http_grpc_web_next_request_body_filter;
 static ngx_http_output_header_filter_pt ngx_http_grpc_web_next_header_filter;
@@ -138,6 +151,108 @@ ngx_http_grpc_web_content_type_mode(ngx_http_request_t *r)
     return NGX_GRPC_WEB_MODE_NONE;
 }
 
+static ngx_flag_t
+ngx_http_grpc_web_accepts_text(ngx_http_request_t *r)
+{
+    ngx_uint_t i;
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h;
+    ngx_str_t v;
+
+    part = &r->headers_in.headers.part;
+    h = part->elts;
+
+    for (i = 0; /* void */; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (h[i].hash == 0 || h[i].key.len != sizeof("Accept") - 1
+            || ngx_strncasecmp(h[i].key.data, (u_char *) "Accept",
+                               sizeof("Accept") - 1) != 0)
+        {
+            continue;
+        }
+
+        v = h[i].value;
+
+        if (v.len == sizeof("application/grpc-web-text") - 1
+            && ngx_strncasecmp(v.data,
+                              (u_char *) "application/grpc-web-text",
+                              v.len) == 0)
+        {
+            return 1;
+        }
+
+        if (v.len == sizeof("application/grpc-web-text+proto") - 1
+            && ngx_strncasecmp(v.data,
+                              (u_char *) "application/grpc-web-text+proto",
+                              v.len) == 0)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static ngx_flag_t
+ngx_http_grpc_web_is_native_grpc_response(ngx_http_request_t *r)
+{
+    ngx_str_t ct;
+
+    if (r->headers_out.status != NGX_HTTP_OK) {
+        return 0;
+    }
+
+    ct = r->headers_out.content_type;
+    if (ct.len < sizeof("application/grpc") - 1) {
+        return 0;
+    }
+
+    return ngx_strncasecmp(ct.data,
+                           (u_char *) "application/grpc",
+                           sizeof("application/grpc") - 1) == 0;
+}
+
+static ngx_flag_t
+ngx_http_grpc_web_has_response_header(ngx_http_request_t *r,
+    const char *name, size_t len)
+{
+    ngx_uint_t i;
+    ngx_list_part_t *part;
+    ngx_table_elt_t *h;
+
+    part = &r->headers_out.headers.part;
+    h = part->elts;
+
+    for (i = 0; /* void */; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (h[i].hash == 0 || h[i].key.len != len) {
+            continue;
+        }
+
+        if (ngx_strncasecmp(h[i].key.data, (u_char *) name, len) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static ngx_int_t
 ngx_http_grpc_web_ensure_te(ngx_http_request_t *r)
 {
@@ -194,8 +309,8 @@ ngx_http_grpc_web_rewrite_handler(ngx_http_request_t *r)
 
     ctx->active = 1;
     ctx->mode = (ngx_grpc_web_mode_e) mode;
+    ctx->text_response = ngx_http_grpc_web_accepts_text(r);
     grpc_web_b64_decoder_init(&ctx->request_decoder);
-    grpc_web_b64_encoder_init(&ctx->response_encoder);
     grpc_web_frame_parser_init(&ctx->response_frame);
 
     ct = r->headers_in.content_type;
@@ -389,19 +504,49 @@ ngx_http_grpc_web_request_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 static ngx_int_t
 ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
 {
+    ngx_flag_t trailers_only;
     ngx_http_grpc_web_ctx_t *ctx;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_grpc_web_module);
-    if (ctx == NULL || !ctx->active
-        || ctx->mode != NGX_GRPC_WEB_MODE_BINARY)
-    {
+    if (ctx == NULL || !ctx->active) {
         return ngx_http_grpc_web_next_header_filter(r);
     }
 
-    r->headers_out.content_type = ctx->downstream_content_type;
-    r->headers_out.content_type_len = ctx->downstream_content_type.len;
+    if (!ngx_http_grpc_web_is_native_grpc_response(r)) {
+        ctx->transform_response = 0;
+        return ngx_http_grpc_web_next_header_filter(r);
+    }
+
+    ctx->transform_response = 1;
+    trailers_only = (r->headers_out.content_length_n == 0
+        && ngx_http_grpc_web_has_response_header(
+            r, "grpc-status", sizeof("grpc-status") - 1));
+
+    if (ctx->text_response) {
+        ngx_str_set(&r->headers_out.content_type,
+                    "application/grpc-web-text+proto");
+    } else {
+        ngx_str_set(&r->headers_out.content_type,
+                    "application/grpc-web+proto");
+    }
+
+    r->headers_out.content_type_len = r->headers_out.content_type.len;
     r->headers_out.content_type_lowcase = NULL;
     r->headers_out.content_type_hash = 0;
+
+    if (trailers_only) {
+        /*
+         * ngx_http_grpc_module represents an upstream HEADERS+END_STREAM
+         * response as ordinary response headers.  In this form grpc-status
+         * and grpc-message are already browser-visible and there is no native
+         * trailer list from which to synthesize a 0x80 body frame.  Envoy also
+         * permits this trailers-only wire shape, so leave the empty body and
+         * status headers intact after rewriting only the media type.
+         */
+        ctx->trailers_sent = 1;
+        r->expect_trailers = 0;
+        return ngx_http_grpc_web_next_header_filter(r);
+    }
 
     if (r->headers_out.content_length != NULL) {
         r->headers_out.content_length->hash = 0;
@@ -518,18 +663,238 @@ ngx_http_grpc_web_build_trailer_frame(ngx_http_request_t *r)
     return cl;
 }
 
+static ngx_chain_t *
+ngx_http_grpc_web_encode_text_block(ngx_http_request_t *r,
+    const u_char *src, size_t src_len, ngx_flag_t flush, ngx_flag_t last_buf)
+{
+    int rc;
+    size_t groups, cap, written;
+    ngx_buf_t *b;
+    ngx_chain_t *cl;
+    grpc_web_b64_encoder_t encoder;
+
+    if (src_len > NGX_MAX_SIZE_T_VALUE - 2) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    groups = (src_len + 2) / 3;
+    if (groups > NGX_MAX_SIZE_T_VALUE / 4) {
+        return NGX_CHAIN_ERROR;
+    }
+    cap = groups * 4;
+
+    b = ngx_create_temp_buf(r->pool, cap == 0 ? 1 : cap);
+    if (b == NULL) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    grpc_web_b64_encoder_init(&encoder);
+    written = 0;
+    rc = grpc_web_b64_encode_update(&encoder,
+        src, src_len, b->last, cap == 0 ? 1 : cap, &written, 1);
+    if (rc != 0) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "grpc-web base64 response encoder failure");
+        return NGX_CHAIN_ERROR;
+    }
+
+    b->last += written;
+    b->flush = flush;
+    b->last_buf = last_buf;
+    b->last_in_chain = last_buf;
+
+    cl = ngx_alloc_chain_link(r->pool);
+    if (cl == NULL) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    cl->buf = b;
+    cl->next = NULL;
+    return cl;
+}
+
+static ngx_int_t
+ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
+    ngx_http_grpc_web_ctx_t *ctx, ngx_chain_t *in, ngx_chain_t **out)
+{
+    size_t n, src_len, frame_size;
+    uint64_t frame_size64;
+    u_char *src;
+    ngx_buf_t *b;
+    ngx_chain_t *cl, *encoded, *trailers, **ll;
+    ngx_http_grpc_web_loc_conf_t *glcf;
+
+    *out = NULL;
+    ll = out;
+    glcf = ngx_http_get_module_loc_conf(r, ngx_http_grpc_web_module);
+
+    for (cl = in; cl != NULL; cl = cl->next) {
+        b = cl->buf;
+
+        if (ngx_buf_in_memory(b)) {
+            src = b->pos;
+            src_len = (size_t) (b->last - b->pos);
+        } else {
+            if (ngx_buf_size(b) != 0) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "grpc-web native response data is not in memory");
+                return NGX_ERROR;
+            }
+            src = NULL;
+            src_len = 0;
+        }
+
+        while (src_len != 0) {
+            if (!ctx->response_frame.header_ready) {
+                n = grpc_web_frame_consume(&ctx->response_frame, src, src_len);
+                src += n;
+                src_len -= n;
+                b->pos += n;
+
+                if (!ctx->response_frame.header_ready) {
+                    continue;
+                }
+
+                if (ctx->response_frame.length > glcf->max_frame_size) {
+                    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                                  "grpc-web response frame too large: %uD",
+                                  ctx->response_frame.length);
+                    return NGX_ERROR;
+                }
+
+                frame_size64 = (uint64_t) GRPC_WEB_FRAME_HEADER_SIZE
+                             + (uint64_t) ctx->response_frame.length;
+                if (frame_size64 > (uint64_t) NGX_MAX_SIZE_T_VALUE) {
+                    return NGX_ERROR;
+                }
+
+                frame_size = (size_t) frame_size64;
+                ctx->response_frame_buf = ngx_create_temp_buf(r->pool, frame_size);
+                if (ctx->response_frame_buf == NULL) {
+                    return NGX_ERROR;
+                }
+
+                ctx->response_frame_buf->last = ngx_cpymem(
+                    ctx->response_frame_buf->last,
+                    ctx->response_frame.header,
+                    GRPC_WEB_FRAME_HEADER_SIZE);
+
+                if (grpc_web_frame_is_complete(&ctx->response_frame)) {
+                    encoded = ngx_http_grpc_web_encode_text_block(r,
+                        ctx->response_frame_buf->pos,
+                        (size_t) (ctx->response_frame_buf->last
+                                  - ctx->response_frame_buf->pos),
+                        1, 0);
+                    if (encoded == NGX_CHAIN_ERROR) {
+                        return NGX_ERROR;
+                    }
+
+                    *ll = encoded;
+                    ll = &encoded->next;
+                    ctx->response_frame_buf = NULL;
+                    grpc_web_frame_next(&ctx->response_frame);
+                }
+
+                continue;
+            }
+
+            n = grpc_web_frame_consume(&ctx->response_frame, src, src_len);
+            if (n == 0 || ctx->response_frame_buf == NULL) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "grpc-web invalid native response frame state");
+                return NGX_ERROR;
+            }
+
+            ctx->response_frame_buf->last = ngx_cpymem(
+                ctx->response_frame_buf->last, src, n);
+            src += n;
+            src_len -= n;
+            b->pos += n;
+
+            if (grpc_web_frame_is_complete(&ctx->response_frame)) {
+                encoded = ngx_http_grpc_web_encode_text_block(r,
+                    ctx->response_frame_buf->pos,
+                    (size_t) (ctx->response_frame_buf->last
+                              - ctx->response_frame_buf->pos),
+                    1, 0);
+                if (encoded == NGX_CHAIN_ERROR) {
+                    return NGX_ERROR;
+                }
+
+                *ll = encoded;
+                ll = &encoded->next;
+                ctx->response_frame_buf = NULL;
+                grpc_web_frame_next(&ctx->response_frame);
+            }
+        }
+
+        if (ngx_buf_in_memory(b)) {
+            b->pos = b->last;
+        }
+
+        if (!b->last_buf) {
+            continue;
+        }
+
+        if (ctx->response_frame.header_len != 0
+            || ctx->response_frame.header_ready
+            || ctx->response_frame_buf != NULL)
+        {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                          "grpc-web incomplete native response frame at EOF");
+            return NGX_ERROR;
+        }
+
+        trailers = ngx_http_grpc_web_build_trailer_frame(r);
+        if (trailers == NGX_CHAIN_ERROR) {
+            return NGX_ERROR;
+        }
+
+        encoded = ngx_http_grpc_web_encode_text_block(r,
+            trailers->buf->pos,
+            (size_t) (trailers->buf->last - trailers->buf->pos),
+            1, 1);
+        if (encoded == NGX_CHAIN_ERROR) {
+            return NGX_ERROR;
+        }
+
+        *ll = encoded;
+        ll = &encoded->next;
+        ctx->trailers_sent = 1;
+    }
+
+    return NGX_OK;
+}
+
 static ngx_int_t
 ngx_http_grpc_web_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
+    ngx_int_t rc;
     ngx_http_grpc_web_ctx_t *ctx;
-    ngx_chain_t *cl, *last, *trailers;
+    ngx_chain_t *cl, *last, *out, *trailers;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_grpc_web_module);
-    if (ctx == NULL || !ctx->active
-        || ctx->mode != NGX_GRPC_WEB_MODE_BINARY
+    if (ctx == NULL || !ctx->active || !ctx->transform_response
         || ctx->trailers_sent)
     {
         return ngx_http_grpc_web_next_body_filter(r, in);
+    }
+
+    if (in == NULL) {
+        return ngx_http_grpc_web_next_body_filter(r, NULL);
+    }
+
+    if (ctx->text_response) {
+        rc = ngx_http_grpc_web_encode_text_response(r, ctx, in, &out);
+        if (rc != NGX_OK) {
+            return rc;
+        }
+
+        if (out == NULL) {
+            return NGX_OK;
+        }
+
+        return ngx_http_grpc_web_next_body_filter(r, out);
     }
 
     last = NULL;
