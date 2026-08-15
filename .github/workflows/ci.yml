@@ -37,7 +37,7 @@ jobs:
     env:
       NGINX_VERSION: "1.30.4"
       BUILD_CC: gcc
-      PERF_OUTPUT_DIR: ${{ runner.temp }}/perf-smoke
+      PERF_OUTPUT_DIR: /tmp/perf-smoke
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: perf-smoke-results
-          path: ${{ runner.temp }}/perf-smoke/
+          path: /tmp/perf-smoke/
           if-no-files-found: warn
           retention-days: 3
 
