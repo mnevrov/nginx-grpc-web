@@ -130,5 +130,12 @@ jobs:
       - working-directory: tests/browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
       - run: make test-browser BROWSER=${{ matrix.browser }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-${{ matrix.browser }}-failure
+          path: tests/browser/test-results/
+          if-no-files-found: error
+          retention-days: 3
       - if: always()
         run: docker compose logs
