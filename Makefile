@@ -1,4 +1,4 @@
-.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-smoke perf-typical perf-large perf-slow perf-down lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-down lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
@@ -22,10 +22,14 @@ help:
 	  'make test-browser    - browser grpc-web tests; BROWSER=chromium|firefox|webkit optional' \
 	  'make package-module  - export versioned .so from Docker; NGINX_VERSION/BUILD_CC configurable' \
 	  'make perf-loadgen-test - Go loadgen protocol/unit tests' \
-	  'make perf-smoke      - short A/B topology + report validation' \
-	  'make perf-typical    - 4 KiB server-stream concurrency A/B' \
-	  'make perf-large      - 1/4/8 MiB text+binary A/B sweep' \
-	  'make perf-slow       - slow-consumer/backpressure A/B sweep' \
+	  'make perf-smoke      - HTTP/1.1 short A/B topology + report validation' \
+	  'make perf-typical    - HTTP/1.1 4 KiB server-stream concurrency A/B' \
+	  'make perf-large      - HTTP/1.1 1/4/8 MiB text+binary A/B sweep' \
+	  'make perf-slow       - HTTP/1.1 slow-consumer/backpressure A/B sweep' \
+	  'make perf-h2-smoke   - TLS/HTTP2 strict A/B topology + report validation' \
+	  'make perf-h2-typical - TLS/HTTP2 4 KiB concurrency A/B' \
+	  'make perf-h2-large   - TLS/HTTP2 1/4/8 MiB text+binary A/B sweep' \
+	  'make perf-h2-slow    - TLS/HTTP2 slow-consumer/backpressure A/B sweep' \
 	  'make perf-down       - stop performance topology' \
 	  'make down            - stop test stack'
 
@@ -115,16 +119,28 @@ perf-loadgen-test:
 	cd perf/loadgen && go test ./...
 
 perf-smoke:
-	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh smoke
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh smoke
 
 perf-typical:
-	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh typical
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh typical
 
 perf-large:
-	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh large
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh large
 
 perf-slow:
-	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./perf/run-ab.sh slow
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh slow
+
+perf-h2-smoke:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 bash ./perf/run-ab.sh smoke
+
+perf-h2-typical:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 bash ./perf/run-ab.sh typical
+
+perf-h2-large:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 bash ./perf/run-ab.sh large
+
+perf-h2-slow:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=tls-h2 bash ./perf/run-ab.sh slow
 
 perf-down:
 	docker compose -f perf/docker-compose.perf.yml down -v
