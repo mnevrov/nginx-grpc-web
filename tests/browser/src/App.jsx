@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
-import { openStream, unaryBinary } from "./client.mjs";
+import { failText, openStream, unaryBinary, unaryText } from "./client.mjs";
 
 function readOptions() {
   const params = new URLSearchParams(window.location.search);
@@ -9,6 +9,7 @@ function readOptions() {
     rpc: params.get("rpc") ?? "stream-text",
     count: Number(params.get("count") ?? "3"),
     delayMs: Number(params.get("delayMs") ?? "200"),
+    code: Number(params.get("code") ?? "3"),
     message: params.get("message") ?? "browser",
   };
 }
@@ -29,10 +30,8 @@ export function App() {
       setState(next);
     };
 
-    window.__grpcWebHarness = { status: "running", events: [], error: null };
-
-    if (options.rpc === "unary-binary") {
-      unaryBinary(options.endpoint, options.message)
+    const runUnary = (promise) => {
+      promise
         .then((msg) => {
           publish({
             status: "done",
@@ -53,7 +52,26 @@ export function App() {
             error: { code: err.code ?? null, message: err.message ?? String(err) },
           });
         });
+    };
 
+    window.__grpcWebHarness = { status: "running", events: [], error: null };
+
+    if (options.rpc === "unary-binary") {
+      runUnary(unaryBinary(options.endpoint, options.message));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (options.rpc === "unary-text") {
+      runUnary(unaryText(options.endpoint, options.message));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (options.rpc === "fail-text") {
+      runUnary(failText(options.endpoint, options.code, options.message));
       return () => {
         cancelled = true;
       };
