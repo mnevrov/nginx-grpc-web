@@ -71,6 +71,7 @@ args=(
   --package-dir "$PACKAGE_DIR"
   --controlled-dir "$RELEASE_OUTPUT_DIR/controlled"
   --soak-dir "$RELEASE_OUTPUT_DIR/soak"
+  --revalidation "$RELEASE_OUTPUT_DIR/revalidation.json"
   --output "$RELEASE_OUTPUT_DIR/release-evidence.json"
   --markdown "$RELEASE_OUTPUT_DIR/release-evidence.md"
 )
