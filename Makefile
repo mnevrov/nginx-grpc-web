@@ -1,10 +1,13 @@
-.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
 FUZZ_CC ?= clang
 FUZZ_CFLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -Wall -Wextra -Werror
 SANITIZER_CFLAGS ?= -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Werror
+BROWSER ?=
+NGINX_VERSION ?= 1.30.4
+BUILD_CC ?= gcc
 
 help:
 	@printf '%s\n' \
@@ -16,7 +19,8 @@ help:
 	  'make test-reference  - Envoy integration baseline' \
 	  'make test-module     - NGINX implemented module integration tests' \
 	  'make test-diff       - Envoy vs NGINX implemented differential tests' \
-	  'make test-browser    - browser grpc-web tests' \
+	  'make test-browser    - browser grpc-web tests; BROWSER=chromium|firefox|webkit optional' \
+	  'make package-module  - export versioned .so from Docker; NGINX_VERSION/BUILD_CC configurable' \
 	  'make down            - stop test stack'
 
 build/unit-base64:
@@ -55,7 +59,7 @@ reference-up:
 	docker compose up -d --build backend envoy
 
 module-up:
-	docker compose up -d --build backend nginx
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) docker compose up -d --build backend nginx
 
 down:
 	docker compose down -v
@@ -96,4 +100,7 @@ test-diff:
 	  tests/protocol/test_module_failures.py::test_nginx_grpc_timeout_matches_envoy
 
 test-browser:
-	cd tests/browser && npm test
+	cd tests/browser && npx playwright test $(if $(BROWSER),--project=$(BROWSER),)
+
+package-module:
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) ./scripts/package-module.sh
