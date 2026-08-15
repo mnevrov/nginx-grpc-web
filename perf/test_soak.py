@@ -17,6 +17,11 @@ def sample(second: float, rss_mib: float) -> dict:
 
 def healthy_events(**overrides) -> dict:
     base = {
+        "host": {
+            "strict": True,
+            "valid": True,
+            "fingerprint": "host-a",
+        },
         "steady": {"runs": 1, "unexpected_errors": 0},
         "churn": {"runs": 5, "unexpected_errors": 0},
         "cancel": {
@@ -27,10 +32,14 @@ def healthy_events(**overrides) -> dict:
         },
         "backend_restart": {
             "attempted": 1,
+            "observed_disruption": True,
+            "inflight_errors": 3,
             "recovery_success": True,
         },
         "transport_reset": {
             "attempted": 10,
+            "expected_failures": 10,
+            "observed_failures": 10,
             "recovery_success": True,
         },
         "final_probe": {"success": True},
@@ -89,6 +98,7 @@ class SoakEvaluationTests(unittest.TestCase):
     def test_shared_ci_never_becomes_production_evidence(self):
         timeline = self.controlled_timeline()
         timeline["strict"] = False
+        timeline["events"]["host"] = {"strict": False, "valid": True, "fingerprint": "ci-host"}
         result = evaluate_soak(timeline, POLICY)
         self.assertEqual(result["evidence_class"], "harness_only")
         self.assertEqual(result["verdict"], "inconclusive")
@@ -112,11 +122,53 @@ class SoakEvaluationTests(unittest.TestCase):
     def test_backend_must_recover_after_restart(self):
         timeline = self.controlled_timeline()
         events = healthy_events()
-        events["backend_restart"] = {"attempted": 1, "recovery_success": False}
+        events["backend_restart"] = {
+            "attempted": 1,
+            "observed_disruption": True,
+            "inflight_errors": 3,
+            "recovery_success": False,
+        }
         timeline["events"] = events
         result = evaluate_soak(timeline, POLICY)
         self.assertEqual(result["verdict"], "soak_fail")
         self.assertIn("backend_recovery", result["reasons"])
+
+    def test_backend_restart_must_interrupt_active_stream(self):
+        timeline = self.controlled_timeline()
+        events = healthy_events()
+        events["backend_restart"] = {
+            "attempted": 1,
+            "observed_disruption": False,
+            "inflight_errors": 0,
+            "recovery_success": True,
+        }
+        timeline["events"] = events
+        result = evaluate_soak(timeline, POLICY)
+        self.assertEqual(result["verdict"], "soak_fail")
+        self.assertIn("backend_disruption", result["reasons"])
+
+    def test_transport_reset_failure_count_must_match(self):
+        timeline = self.controlled_timeline()
+        events = healthy_events()
+        events["transport_reset"] = {
+            "attempted": 10,
+            "expected_failures": 10,
+            "observed_failures": 9,
+            "recovery_success": True,
+        }
+        timeline["events"] = events
+        result = evaluate_soak(timeline, POLICY)
+        self.assertEqual(result["verdict"], "soak_fail")
+        self.assertIn("transport_reset_accounting", result["reasons"])
+
+    def test_strict_mode_requires_valid_strict_host_preflight(self):
+        timeline = self.controlled_timeline()
+        events = healthy_events()
+        events["host"] = {"strict": False, "valid": True, "fingerprint": "host-a"}
+        timeline["events"] = events
+        result = evaluate_soak(timeline, POLICY)
+        self.assertEqual(result["verdict"], "soak_fail")
+        self.assertIn("host_preflight", result["reasons"])
 
     def test_nginx_master_or_container_restart_fails(self):
         timeline = self.controlled_timeline()
