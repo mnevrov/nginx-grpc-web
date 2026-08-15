@@ -15,6 +15,25 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
+def controlled_fixture(root: Path, **overrides) -> Path:
+    controlled = root / "controlled"
+    controlled.mkdir()
+    manifest = {
+        "frontend": "tls-h2",
+        "transport": "text",
+        "payload_bytes": 4096,
+        "messages": 20,
+        "backend_delay_ms": 20,
+        "consumer_delay_ms": 0,
+        "gateway_cpuset": "2-5",
+    }
+    manifest.update(overrides)
+    write_json(controlled / "manifest.json", manifest)
+    write_json(controlled / "slo.json", {"max_error_rate": 0.01})
+    write_json(controlled / "decision-policy.json", {"min_repeats": 3})
+    return controlled
+
+
 class RevalidationTests(unittest.TestCase):
     def test_semantically_equal_json_ignores_formatting(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -38,20 +57,22 @@ class RevalidationTests(unittest.TestCase):
     def test_controlled_requires_raw_repeat_directories(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            controlled = root / "controlled"
-            controlled.mkdir()
-            write_json(controlled / "manifest.json", {
-                "frontend": "tls-h2",
-                "transport": "text",
-                "payload_bytes": 4096,
-                "messages": 20,
-                "backend_delay_ms": 20,
-                "consumer_delay_ms": 0,
-                "gateway_cpuset": "2-5",
-            })
-            write_json(controlled / "slo.json", {"max_error_rate": 0.01})
-            write_json(controlled / "decision-policy.json", {"min_repeats": 3})
+            controlled = controlled_fixture(root)
             with self.assertRaisesRegex(EvidenceInputError, "no repeat-\\* directories"):
+                revalidate_controlled(root, controlled)
+
+    def test_controlled_rejects_string_integer_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            controlled = controlled_fixture(root, messages="20")
+            with self.assertRaisesRegex(EvidenceInputError, "messages must be an integer"):
+                revalidate_controlled(root, controlled)
+
+    def test_controlled_rejects_boolean_integer_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            controlled = controlled_fixture(root, payload_bytes=True)
+            with self.assertRaisesRegex(EvidenceInputError, "payload_bytes must be an integer"):
                 revalidate_controlled(root, controlled)
 
     def test_soak_revalidation_requires_strict_manifest(self):
@@ -61,6 +82,15 @@ class RevalidationTests(unittest.TestCase):
             soak.mkdir()
             write_json(soak / "manifest.json", {"strict": False})
             with self.assertRaisesRegex(EvidenceInputError, "requires strict=true"):
+                revalidate_soak(root, soak)
+
+    def test_soak_revalidation_rejects_string_true(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            soak = root / "soak"
+            soak.mkdir()
+            write_json(soak / "manifest.json", {"strict": "true"})
+            with self.assertRaisesRegex(EvidenceInputError, "requires strict=true boolean"):
                 revalidate_soak(root, soak)
 
 
