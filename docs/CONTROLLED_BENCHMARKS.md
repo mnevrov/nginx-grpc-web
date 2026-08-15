@@ -13,8 +13,11 @@ Strict preflight требует:
 - Linux cgroup v2;
 - заданный `PERF_GATEWAY_CPUSET`;
 - заданный `PERF_BACKEND_CPUSET`;
-- отсутствие пересечения gateway/backend CPU sets;
+- заданный `PERF_LOADGEN_CPUSET`;
+- отсутствие пересечения gateway/backend/loadgen CPU sets;
 - одинаковый host fingerprint во всех repeats.
+
+`run-controlled.sh` запускает весь benchmark controller через `taskset` на `PERF_LOADGEN_CPUSET`. Gateway containers получают `PERF_GATEWAY_CPUSET`, backend container — `PERF_BACKEND_CPUSET`. Это не позволяет load generator отъедать CPU budget измеряемого gateway.
 
 CPU governor сохраняется в host snapshot. Режим, отличный от `performance`, пока является warning, а не hard error: на виртуализированных/managed host governor может быть недоступен или не контролироваться гостевой ОС.
 
@@ -38,7 +41,7 @@ recommendation = inconclusive
 - total RAM;
 - Docker server version;
 - cgroup version;
-- gateway/backend CPU sets;
+- gateway/backend/loadgen CPU sets;
 - CPU governors.
 
 Timestamp и hostname в fingerprint не входят, поэтому перенос результата между каталогами или изменение имени host не создают ложную несовместимость.
@@ -65,6 +68,7 @@ Timestamp и hostname в fingerprint не входят, поэтому пере�
 PERF_FRONTEND=tls-h2 \
 PERF_GATEWAY_CPUSET=2-5 \
 PERF_BACKEND_CPUSET=6-7 \
+PERF_LOADGEN_CPUSET=8-11 \
 PERF_CAPACITY_SLO=/data/grpc-web-slo.json \
 PERF_CAPACITY_STEPS=25,50,100,200,400,800,1200 \
 PERF_CONTROLLED_REPEATS=5 \
@@ -82,6 +86,7 @@ bash ./perf/run-controlled.sh
 PERF_FRONTEND=tls-h2 \
 PERF_GATEWAY_CPUSET=2-5 \
 PERF_BACKEND_CPUSET=6-7 \
+PERF_LOADGEN_CPUSET=8-11 \
 PERF_CAPACITY_SLO=/data/grpc-web-large-slo.json \
 PERF_CAPACITY_PAYLOAD_BYTES=4194304 \
 PERF_CAPACITY_MESSAGES=8 \
@@ -108,6 +113,7 @@ PERF_CAPACITY_PAYLOAD_BYTES=8388608
 PERF_FRONTEND=tls-h2 \
 PERF_GATEWAY_CPUSET=2-5 \
 PERF_BACKEND_CPUSET=6-7 \
+PERF_LOADGEN_CPUSET=8-11 \
 PERF_CAPACITY_SLO=/data/grpc-web-slow-slo.json \
 PERF_CAPACITY_PAYLOAD_BYTES=32768 \
 PERF_CAPACITY_MESSAGES=20 \
@@ -141,7 +147,7 @@ bash ./perf/run-controlled.sh
 └── decision.md
 ```
 
-`manifest.json` фиксирует commit, NGINX version/compiler, frontend, repeat count и scenario parameters.
+`manifest.json` фиксирует commit, NGINX version/compiler, frontend, repeat count, CPU sets и scenario parameters.
 
 ## Как строится итоговый decision
 
