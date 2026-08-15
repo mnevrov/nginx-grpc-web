@@ -40,12 +40,26 @@ cp "$RELEASE_GATES" "$RELEASE_OUTPUT_DIR/gates.json"
 cp -a "$RELEASE_CONTROLLED_DIR"/. "$RELEASE_OUTPUT_DIR/controlled/"
 cp -a "$RELEASE_SOAK_DIR"/. "$RELEASE_OUTPUT_DIR/soak/"
 
+revalidation_rc=0
 if [[ "$RELEASE_ALLOW_INCONCLUSIVE" == "0" ]]; then
+  set +e
   python3 "$ROOT/release/revalidate.py" \
     --repo-root "$ROOT" \
     --controlled-dir "$RELEASE_OUTPUT_DIR/controlled" \
     --soak-dir "$RELEASE_OUTPUT_DIR/soak" \
     --output "$RELEASE_OUTPUT_DIR/revalidation.json"
+  revalidation_rc=$?
+  set -e
+  if [[ ! -f "$RELEASE_OUTPUT_DIR/revalidation.json" ]]; then
+    cat > "$RELEASE_OUTPUT_DIR/revalidation.json" <<EOF
+{
+  "version": 1,
+  "valid": false,
+  "reason": "raw_revalidation",
+  "error": "revalidation command exited with status ${revalidation_rc} without writing a result"
+}
+EOF
+  fi
 else
   cat > "$RELEASE_OUTPUT_DIR/revalidation.json" <<'EOF'
 {
@@ -78,7 +92,20 @@ args=(
 if [[ "$RELEASE_ALLOW_INCONCLUSIVE" == "1" ]]; then
   args+=(--allow-inconclusive)
 fi
+
+set +e
 python3 "$ROOT/release/check.py" "${args[@]}"
+check_rc=$?
+set -e
 
 printf 'release bundle:   %s\n' "$RELEASE_OUTPUT_DIR"
 printf 'release evidence: %s\n' "$RELEASE_OUTPUT_DIR/release-evidence.md"
+
+if [[ "$check_rc" != "0" ]]; then
+  exit "$check_rc"
+fi
+if [[ "$revalidation_rc" != "0" ]]; then
+  # Defensive: a successful final verdict must never mask a failed production revalidation process.
+  echo "raw evidence revalidation failed with status $revalidation_rc" >&2
+  exit "$revalidation_rc"
+fi
