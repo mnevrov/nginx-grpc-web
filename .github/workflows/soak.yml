@@ -1,0 +1,93 @@
+name: soak
+
+on:
+  pull_request:
+    paths:
+      - "perf/**"
+      - "tests/backend/**"
+      - "tests/fault_backend/**"
+      - "docker/nginx/**"
+      - ".github/workflows/soak.yml"
+      - "Makefile"
+      - "docs/**"
+      - "README.md"
+  workflow_dispatch:
+
+concurrency:
+  group: soak-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make perf-loadgen-test
+      - run: make perf-soak-test
+
+  soak-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NGINX_VERSION: "1.30.4"
+      BUILD_CC: gcc
+      SOAK_OUTPUT_DIR: /tmp/soak-smoke
+      SOAK_DURATION_SECONDS: "8"
+      SOAK_STATS_INTERVAL: "0.10"
+      SOAK_STEADY_STREAMS: "2"
+      SOAK_STEADY_MESSAGES: "20"
+      SOAK_CHURN_STREAMS: "4"
+      SOAK_CANCEL_STREAMS: "4"
+      SOAK_RESET_STREAMS: "2"
+      SOAK_RESTART_STREAMS: "3"
+      SOAK_RESTART_EVERY_CYCLES: "9999"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: make perf-soak-smoke
+      - name: Validate harness-only soak result
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/soak-smoke')
+          result = json.loads((root / 'soak.json').read_text())
+          events = json.loads((root / 'events.json').read_text())
+
+          assert result['evidence_class'] == 'harness_only', result
+          assert result['verdict'] == 'inconclusive', result
+          assert result['mechanics_pass'] is True, result
+          assert result['reasons'] == ['harness_only'], result
+          assert result['sample_count'] >= 20, result
+          assert result['duration_seconds'] >= 5, result
+
+          assert events['cancel']['expected_cancellations'] > 0, events
+          assert events['cancel']['observed_cancellations'] == events['cancel']['expected_cancellations'], events
+          assert events['backend_restart']['observed_disruption'] is True, events
+          assert events['backend_restart']['inflight_errors'] > 0, events
+          assert events['backend_restart']['recovery_success'] is True, events
+          assert events['transport_reset']['observed_failures'] == events['transport_reset']['expected_failures'], events
+          assert events['transport_reset']['recovery_success'] is True, events
+          assert events['final_probe']['success'] is True, events
+          assert events['nginx']['master_pid_start'] == events['nginx']['master_pid_end'], events
+          assert events['nginx']['container_restart_count_start'] == events['nginx']['container_restart_count_end'], events
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-smoke-results
+          path: /tmp/soak-smoke/
+          if-no-files-found: warn
+          retention-days: 3
