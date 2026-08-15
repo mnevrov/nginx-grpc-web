@@ -81,7 +81,8 @@ test-module:
 	  tests/protocol/test_module_failures.py::test_nginx_grpc_timeout_matches_envoy \
 	  tests/protocol/test_module_failures.py::test_nginx_client_disconnect_cancels_upstream \
 	  tests/protocol/test_module_failures.py::test_nginx_unavailable_is_grpc_web_terminal_status \
-	  tests/protocol/test_module_failures.py::test_nginx_proxy_timeout_is_grpc_web_terminal_status
+	  tests/protocol/test_module_failures.py::test_nginx_proxy_timeout_is_grpc_web_terminal_status \
+	  tests/protocol/test_module_hardening.py
 
 test-diff:
 	python3 -m pytest -q -m integration \
