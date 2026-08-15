@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     runs-on: ubuntu-latest
@@ -52,6 +56,11 @@ jobs:
           sha256sum -c "$package_dir/SHA256SUMS"
           grep -Fx 'nginx_version=1.30.4' "$package_dir/MANIFEST.txt"
           grep -Fx 'compiler=gcc' "$package_dir/MANIFEST.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ngx-http-grpc-web-nginx-1.30.4-gcc-linux-amd64
+          path: dist/nginx-1.30.4-gcc-linux-x86_64/
+          retention-days: 7
 
   integration:
     runs-on: ubuntu-latest
