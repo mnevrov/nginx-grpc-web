@@ -103,4 +103,4 @@ test-browser:
 	cd tests/browser && npx playwright test $(if $(BROWSER),--project=$(BROWSER),)
 
 package-module:
-	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) ./scripts/package-module.sh
+	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) bash ./scripts/package-module.sh
