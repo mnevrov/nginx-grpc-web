@@ -80,6 +80,18 @@ def validate_preflight(info: dict[str, Any], *, strict: bool) -> list[dict[str, 
         add("error", "cpuset_invalid", str(exc))
         parsed = {name: set() for name in names}
 
+    online_text = str(info.get("online_cpus", "") or "")
+    try:
+        online = parse_cpuset(online_text)
+    except ValueError as exc:
+        add("error" if strict else "warning", "online_cpuset_invalid", str(exc))
+        online = set()
+    if online:
+        for name, cpus in parsed.items():
+            offline = cpus - online
+            if offline:
+                add("error", "cpuset_offline", f"{name} CPU set contains offline/unavailable CPUs: {sorted(offline)}")
+
     for left, right in (("gateway", "backend"), ("gateway", "loadgen"), ("backend", "loadgen")):
         overlap = parsed[left] & parsed[right]
         if overlap:
