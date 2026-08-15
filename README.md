@@ -85,22 +85,23 @@ make reference-up
 make test-reference
 ```
 
-Для реализованных M2–M4 путей:
+Для реализованных M2–M5 путей:
 
 ```bash
 # backend + NGINX module
 make module-up
 
-# binary unary + grpc-web-text request/response integration
+# binary/text unary + text server-streaming integration,
+# включая slow-consumer и long-stream RSS regression
 make test-module
 
-# canonical Envoy ↔ NGINX comparison
-# (Envoy также должен быть запущен)
+# canonical Envoy ↔ NGINX comparison,
+# включая streaming semantics/timing shape
 make reference-up
 make test-diff
 
 # real React/grpc-web client in Chromium:
-# binary unary + text unary success/error against Envoy and NGINX
+# binary unary + text unary + text server streaming against Envoy and NGINX
 make test-browser
 ```
 
@@ -175,9 +176,30 @@ M4 завершает `grpc-web-text` unary end-to-end:
 - большой unary response проверяется с `grpc_buffer_size 1k`, чтобы один native frame гарантированно пересекал несколько upstream buffers;
 - успешный text unary и non-zero gRPC status/message проходят через тот же реальный React/`grpc-web` клиент против Envoy и NGINX.
 
-### Последняя M4 валидация
+M5 добавляет и доказывает реальный `grpc-web-text` server streaming:
 
-Функциональный M4 head прошёл:
+- incremental protocol decoder в тестах выдаёт frame сразу после получения достаточного количества HTTP/Base64 данных;
+- backend отправляет несколько сообщений с контролируемыми паузами, а NGINX сохраняет эти паузы на downstream;
+- первое React `data` event наблюдается, пока RPC ещё имеет состояние `running`, то есть response не буферизуется до EOF;
+- streaming response с DATA frame >8 KiB проверяется при `grpc_buffer_size 1k`;
+- final trailers после нескольких DATA frames сохраняются и совпадают с Envoy;
+- slow-consumer regression проверяет корректность при downstream backpressure;
+- long-stream RSS regression проверяет, что рабочая память не растёт пропорционально всему объёму stream.
+
+### Почему M5 потребовал изменение memory lifecycle
+
+Первый M5 timing/browser прогон прошёл без изменений production C-кода: существующий M4 `flush=1` действительно отдавал каждый завершённый frame сразу. Однако stress-тест на 480 сообщений примерно по 64 KiB выявил другую проблему: Base64 output и frame scratch выделялись из `r->pool` для каждого сообщения и удерживались до завершения долгого request. При примерно 40 MiB gRPC-Web text output RSS NGINX вырос на **70.2 MiB**.
+
+M5 заменяет эту схему на bounded reuse:
+
+- native gRPC frame собирается в переиспользуемый scratch buffer, который растёт только до необходимой максимальной ёмкости;
+- Base64 output buffers проходят через стандартные для NGINX `free`/`busy` chains с `ngx_chain_update_chains()`;
+- отправленные tagged buffers возвращаются в `free` chain и используются следующими DATA frames;
+- long-stream regression требует peak RSS delta `< 32 MiB` на том же stress-case.
+
+После buffer reuse этот RSS gate проходит, при этом streaming timing, slow consumer и Envoy differential semantics остаются зелёными.
+
+### Последняя завершённая M4 валидация
 
 - unit tests — ✅;
 - dynamic module build на NGINX 1.30.2 — ✅;
@@ -187,4 +209,4 @@ M4 завершает `grpc-web-text` unary end-to-end:
 - Envoy ↔ NGINX differential — `4 passed`;
 - React/`grpc-web`/Chromium — `7 passed`.
 
-Следующий milestone — **M5: server streaming**. Его критерий готовности — первое сообщение должно доходить до браузера до завершения stream; полная буферизация ответа недопустима.
+Следующий milestone после M5 — **M6: cancellation and failures**: browser cancel, backend reset/unavailable, timeout/deadline, empty stream и расширенная failure matrix.
