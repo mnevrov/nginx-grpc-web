@@ -118,6 +118,16 @@ class CollectorTests(unittest.TestCase):
             with self.assertRaisesRegex(EvidenceInputError, "artifact manifest missing fields: build_mode"):
                 parse_manifest(package / "MANIFEST.txt")
 
+    def test_duplicate_manifest_field_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, package, _, _ = create_fixture(root)
+            path = package / "MANIFEST.txt"
+            text = path.read_text(encoding="utf-8")
+            path.write_text(text.replace("compiler=gcc\n", "compiler=gcc\ncompiler=clang\n"), encoding="utf-8")
+            with self.assertRaisesRegex(EvidenceInputError, "duplicate field: compiler"):
+                parse_manifest(path)
+
     def test_invalid_controlled_json_is_rejected_with_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
