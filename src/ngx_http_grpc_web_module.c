@@ -81,12 +81,12 @@ static ngx_command_t ngx_http_grpc_web_commands[] = {
 };
 
 static ngx_http_module_t ngx_http_grpc_web_module_ctx = {
-    NULL,                         /* preconfiguration */
-    ngx_http_grpc_web_init,       /* postconfiguration */
-    NULL,                         /* create main configuration */
-    NULL,                         /* init main configuration */
-    NULL,                         /* create server configuration */
-    NULL,                         /* merge server configuration */
+    NULL,
+    ngx_http_grpc_web_init,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
     ngx_http_grpc_web_create_loc_conf,
     ngx_http_grpc_web_merge_loc_conf
 };
@@ -203,7 +203,6 @@ ngx_http_grpc_web_rewrite_handler(ngx_http_request_t *r)
 
     ngx_http_set_ctx(r, ctx, ngx_http_grpc_web_module);
 
-    /* Both binary and text gRPC-Web become native gRPC upstream. */
     ngx_str_set(&ct->value, "application/grpc");
 
     if (ngx_http_grpc_web_ensure_te(r) != NGX_OK) {
@@ -211,14 +210,6 @@ ngx_http_grpc_web_rewrite_handler(ngx_http_request_t *r)
     }
 
     if (ctx->mode == NGX_GRPC_WEB_MODE_TEXT) {
-        /*
-         * The downstream Content-Length describes Base64 bytes, not decoded
-         * native gRPC bytes. Keep content_length_n intact while the core body
-         * parser consumes the downstream request, but detach the header pointer
-         * so ngx_http_grpc_module's $content_length does not forward the encoded
-         * value upstream. At the final decoded buffer we replace the numeric
-         * value with the actual decoded size for the fully-preread case.
-         */
         r->headers_in.content_length = NULL;
     }
 
@@ -231,6 +222,7 @@ ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
 {
     int rc;
     size_t cap, max_body, src_len, written;
+    u_char *src;
     ngx_buf_t *b, *ob;
     ngx_chain_t *cl, *ol, **ll;
     ngx_http_grpc_web_loc_conf_t *glcf;
@@ -248,24 +240,30 @@ ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
     for (cl = in; cl != NULL; cl = cl->next) {
         b = cl->buf;
 
-        if (!ngx_buf_in_memory(b)) {
-            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                          "grpc-web text request buffer is not in memory");
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
-        }
-
         if (ctx->request_finished) {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                           "grpc-web duplicate request data after final buffer");
             return NGX_HTTP_BAD_REQUEST;
         }
 
-        src_len = (size_t) (b->last - b->pos);
+        if (ngx_buf_in_memory(b)) {
+            src = b->pos;
+            src_len = (size_t) (b->last - b->pos);
+        } else {
+            if (ngx_buf_size(b) != 0) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "grpc-web text request data is not in memory");
+                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+
+            src = NULL;
+            src_len = 0;
+        }
+
         if (src_len > NGX_MAX_SIZE_T_VALUE - 2) {
             return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
         }
 
-        /* A pending 3-byte Base64 prefix can make output 2 bytes larger. */
         cap = src_len + 2;
         if (cap == 0) {
             cap = 1;
@@ -278,7 +276,7 @@ ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
 
         written = 0;
         rc = grpc_web_b64_decode_update(&ctx->request_decoder,
-            b->pos, src_len, ob->last, cap, &written, b->last_buf);
+            src, src_len, ob->last, cap, &written, b->last_buf);
 
         if (rc == -1) {
             ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
@@ -307,8 +305,9 @@ ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
         ob->last_buf = b->last_buf;
         ob->last_in_chain = b->last_in_chain;
 
-        /* The source buffer has been fully consumed by the decoder. */
-        b->pos = b->last;
+        if (ngx_buf_in_memory(b)) {
+            b->pos = b->last;
+        }
 
         if (written != 0 || ob->last_buf || ob->flush || ob->sync) {
             ol = ngx_alloc_chain_link(r->pool);
@@ -328,8 +327,7 @@ ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
             }
 
             ctx->request_finished = 1;
-            r->headers_in.content_length_n =
-                (off_t) ctx->decoded_request_size;
+            r->headers_in.content_length_n = (off_t) ctx->decoded_request_size;
         }
     }
 
@@ -377,14 +375,11 @@ ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
     r->headers_out.content_type_lowcase = NULL;
     r->headers_out.content_type_hash = 0;
 
-    /* A terminal gRPC-Web trailer frame is appended to the body at EOF. */
     if (r->headers_out.content_length != NULL) {
         r->headers_out.content_length->hash = 0;
         r->headers_out.content_length = NULL;
     }
     r->headers_out.content_length_n = -1;
-
-    /* Keep native gRPC trailers available until the final body-filter call. */
     r->expect_trailers = 1;
 
     return ngx_http_grpc_web_next_header_filter(r);
@@ -477,8 +472,6 @@ ngx_http_grpc_web_build_trailer_frame(ngx_http_request_t *r)
         b->last = ngx_cpymem(b->last, h[i].value.data, h[i].value.len);
         *b->last++ = CR;
         *b->last++ = LF;
-
-        /* Do not emit the native HTTP trailer after converting it to body. */
         h[i].hash = 0;
     }
 
