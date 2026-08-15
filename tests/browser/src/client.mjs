@@ -31,6 +31,20 @@ class StreamRequest {
   }
 }
 
+class FailRequest {
+  constructor(code = 3, message = "forced failure") {
+    this.code = code;
+    this.message = message;
+  }
+
+  serializeBinary() {
+    const w = new BinaryWriter();
+    if (this.code) w.writeInt32(1, this.code);
+    if (this.message) w.writeString(2, this.message);
+    return w.getResultBuffer();
+  }
+}
+
 class EchoReply {
   constructor() {
     this.message = "";
@@ -77,8 +91,21 @@ const streamMethod = new grpcWeb.MethodDescriptor(
   EchoReply.deserializeBinary,
 );
 
+const failMethod = new grpcWeb.MethodDescriptor(
+  "/grpcwebtest.TestService/Fail",
+  grpcWeb.MethodType.UNARY,
+  FailRequest,
+  EchoReply,
+  (request) => request.serializeBinary(),
+  EchoReply.deserializeBinary,
+);
+
+function unaryClient(format) {
+  return new grpcWeb.GrpcWebClientBase({ format });
+}
+
 export function unaryBinary(baseUrl, message = "browser") {
-  const client = new grpcWeb.GrpcWebClientBase({ format: "binary" });
+  const client = unaryClient("binary");
   const request = new UnaryRequest(message);
 
   return client.unaryCall(
@@ -86,6 +113,30 @@ export function unaryBinary(baseUrl, message = "browser") {
     request,
     {},
     unaryMethod,
+  );
+}
+
+export function unaryText(baseUrl, message = "browser") {
+  const client = unaryClient("text");
+  const request = new UnaryRequest(message);
+
+  return client.unaryCall(
+    `${baseUrl}/grpcwebtest.TestService/Unary`,
+    request,
+    {},
+    unaryMethod,
+  );
+}
+
+export function failText(baseUrl, code = 3, message = "forced failure") {
+  const client = unaryClient("text");
+  const request = new FailRequest(code, message);
+
+  return client.unaryCall(
+    `${baseUrl}/grpcwebtest.TestService/Fail`,
+    request,
+    {},
+    failMethod,
   );
 }
 
