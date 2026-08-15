@@ -4,7 +4,7 @@ import os
 import httpx
 import pytest
 
-from grpc_web import decode_frames, encode_data_frame, parse_trailers
+from grpc_web import decode_frames, decode_text_body, encode_data_frame, parse_trailers
 
 
 MODULE = os.getenv("MODULE_URL", "http://127.0.0.1:18080")
@@ -35,11 +35,14 @@ def assert_grpc_web_success(response: httpx.Response) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/grpc-web")
 
-    raw = response.content
     if response.headers["content-type"].startswith("application/grpc-web-text"):
-        raw = base64.b64decode(raw)
+        # DATA and trailers may be independently Base64-encoded and therefore
+        # may contain legal '=' padding before later encoded frames. Never
+        # treat a complete grpc-web-text HTTP body as one Base64 document.
+        frames = decode_text_body([response.content])
+    else:
+        frames = decode_frames(response.content)
 
-    frames = decode_frames(raw)
     assert frames
     assert frames[-1].is_trailer
     assert parse_trailers(frames[-1].payload)["grpc-status"] == "0"
