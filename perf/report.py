@@ -32,16 +32,18 @@ def read_stats(path: Path) -> dict[str, float]:
         raise RuntimeError(f"missing gateway stats file: {path}")
 
     cpu_by_container: dict[str, list[int]] = defaultdict(list)
-    mem_by_timestamp: dict[str, int] = defaultdict(int)
+    rss_by_timestamp: dict[str, int] = defaultdict(int)
+    memory_by_timestamp: dict[str, int] = defaultdict(int)
 
     with path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle, delimiter="\t"):
             ts = row["timestamp"]
             container = row["container"]
             cpu_by_container[container].append(int(row["cpu_usage_usec"]))
-            mem_by_timestamp[ts] += int(row["memory_bytes"])
+            rss_by_timestamp[ts] += int(row["rss_bytes"])
+            memory_by_timestamp[ts] += int(row["memory_current_bytes"])
 
-    samples = len(mem_by_timestamp)
+    samples = len(memory_by_timestamp)
     if samples < 2:
         raise RuntimeError(
             f"gateway stats need at least two cgroup samples, got {samples}: {path}"
@@ -62,7 +64,8 @@ def read_stats(path: Path) -> dict[str, float]:
 
     return {
         "cpu_core_seconds": cpu_core_seconds,
-        "peak_rss_mib": max(mem_by_timestamp.values()) / MIB,
+        "peak_rss_mib": max(rss_by_timestamp.values()) / MIB,
+        "peak_cgroup_memory_mib": max(memory_by_timestamp.values()) / MIB,
         "samples": samples,
     }
 
@@ -91,6 +94,7 @@ def aggregate(runs: list[dict]) -> dict:
     wall_seconds = 0.0
     cpu_core_seconds = 0.0
     peak_rss_mib = 0.0
+    peak_cgroup_memory_mib = 0.0
     stats_samples = 0
 
     for item in runs:
@@ -105,6 +109,9 @@ def aggregate(runs: list[dict]) -> dict:
         errors += int(summary["errors"])
         cpu_core_seconds += stats["cpu_core_seconds"]
         peak_rss_mib = max(peak_rss_mib, stats["peak_rss_mib"])
+        peak_cgroup_memory_mib = max(
+            peak_cgroup_memory_mib, stats["peak_cgroup_memory_mib"]
+        )
         stats_samples += int(stats["samples"])
 
         for stream in data.get("streams", []):
@@ -133,6 +140,7 @@ def aggregate(runs: list[dict]) -> dict:
         "cpu_core_seconds": cpu_core_seconds,
         "cpu_core_seconds_per_gib": cpu_core_seconds / gib if gib else 0.0,
         "peak_rss_mib": peak_rss_mib,
+        "peak_cgroup_memory_mib": peak_cgroup_memory_mib,
         "stats_samples": stats_samples,
     }
 
@@ -200,6 +208,9 @@ def main() -> None:
                         native["cpu_core_seconds_per_gib"], legacy["cpu_core_seconds_per_gib"]
                     ),
                     "peak_rss_mib": delta_percent(native["peak_rss_mib"], legacy["peak_rss_mib"]),
+                    "peak_cgroup_memory_mib": delta_percent(
+                        native["peak_cgroup_memory_mib"], legacy["peak_cgroup_memory_mib"]
+                    ),
                 },
             }
         )
@@ -264,7 +275,9 @@ def main() -> None:
             "",
             "The `backend→client` metric uses a backend-relative timestamp taken immediately before `grpc.aio` yields each response. It includes protobuf serialization/native gRPC transport plus gateway/downstream delivery; because the backend is identical for both paths, the A/B delta is the useful signal.",
             "",
-            "Gateway CPU is measured from cgroup v2 cumulative `usage_usec` before/through/after each measured run. Legacy CPU is the sum of front NGINX + Envoy; native CPU is the NGINX(module) cgroup. Peak RSS is the maximum sampled sum of the same gateway containers.",
+            "Gateway CPU is measured from cgroup v2 cumulative `usage_usec` before/through/after each measured run. Legacy CPU is the sum of front NGINX + Envoy; native CPU is the NGINX(module) cgroup.",
+            "",
+            "Peak RSS is the maximum sampled sum of process `VmRSS` for all PIDs in the relevant container cgroups. `report.json` additionally records `peak_cgroup_memory_mib` from `memory.current`, which includes cache and other cgroup-charged memory and is intentionally not labelled RSS.",
             "",
             "Use a dedicated host and longer A/B/B/A measurement windows for release-quality CPU/GiB and latency conclusions. The GitHub Actions smoke result validates the harness only.",
             "",
