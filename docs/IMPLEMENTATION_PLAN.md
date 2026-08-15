@@ -234,6 +234,61 @@ TLS/H2 results are a production-like transport baseline, not literal browser cer
 
 `max_sustainable_streams` is meaningful only when derived from a monotonic tested staircase under one fixed SLO and resource budget. If `first_failed_streams` is `null`, the capacity boundary was not reached and the staircase must continue. Shared GitHub runner values validate the harness only; architecture claims require controlled-host repeated runs.
 
+## M12 — Controlled-host benchmark decision ✅
+
+- strict host preflight built on Linux cgroup v2;
+- explicit non-overlapping gateway/backend/loadgen CPU sets;
+- validation that configured CPUs are online;
+- stable host fingerprint excludes timestamp/hostname noise but captures kernel, CPU, RAM, Docker/cgroup and CPU allocation;
+- complete M11 capacity staircase repeated independently;
+- minimum repeat count defined by decision policy;
+- legacy/native sustainable capacity aggregated as min/median/max/CV;
+- architecture comparison uses the conservative common sustainable load instead of comparing resource usage at different concurrencies;
+- p99 TTFD, p99 backend-to-client latency, CPU, RSS and error deltas aggregated across repeats;
+- `decision.json` + `decision.md` outputs;
+- shared GitHub runner forced to `harness_only/inconclusive`, regardless of favorable deltas;
+- typical, 4 MiB/8 MiB DATA and slow-consumer controlled-run methodology documented.
+
+**Exit:** repeated TLS/H2 controlled workflow mechanics green; mixed hosts and unstable repeats are rejected; only strict controlled evidence can produce `native_preferred`; no production module C behavior changed.
+
+### M12 evidence rule
+
+Performance numbers from shared CI are never architecture evidence. A decision requires one stable controlled host configuration, isolated CPU budgets, repeated complete staircases and bounded variance. Raw per-repeat artifacts are preserved next to the aggregate decision.
+
+## M13 — Server-streaming soak / production readiness 🚧
+
+- Go loadgen supports deterministic expected client cancellation after N DATA frames;
+- cancellation is counted separately from successful completion and cannot mask unexpected errors;
+- one TLS/H2 native NGINX master/worker remains alive for the entire soak;
+- continuous cgroup-v2 process RSS and `memory.current` sampling;
+- least-squares RSS slope in MiB/hour after configurable warmup;
+- separate RSS growth and peak gates;
+- repeated steady long-lived streams;
+- high lifecycle churn from many short streams;
+- repeated cancel/reconnect batches with exact expected/observed accounting;
+- hard backend restart while RPCs are active;
+- backend disruption is only valid when at least one in-flight RPC is actually interrupted;
+- healthy RPC must recover after backend restart;
+- deterministic raw HTTP/2 transport resets on a separate TLS listener of the same NGINX worker;
+- exact expected/observed reset accounting and healthy recovery probe;
+- final healthy probe after the complete soak;
+- NGINX master PID and Docker `RestartCount` must remain unchanged;
+- strict soak inherits M12 host preflight and CPU isolation;
+- default strict policy requires at least two hours; an eight-hour release-candidate soak is recommended;
+- shared CI performs a bounded orchestration smoke only and remains `harness_only/inconclusive`.
+
+**Exit:** pure trend/lifecycle tests green; TLS/H2 soak smoke proves steady/churn/cancel/backend-crash/reset/recovery mechanics on one worker; exact standard CI matrix remains green; production module C behavior is unchanged. A real production-readiness claim additionally requires preserved strict controlled 2-hour and release-candidate 8-hour artifacts on target-class hardware.
+
+### M13 restart finding
+
+The first soak smoke used ordinary `docker compose restart backend`. Docker's default graceful stop window allowed the short benchmark streams to finish before backend termination, so the test correctly rejected the run with `backend_disruption` even though recovery succeeded.
+
+The perf backend now uses `stop_grace_period: 0s` specifically for the M13 topology. This turns restart into a deterministic hard disruption: active RPCs must fail, after which the same NGINX worker must recover on the next healthy request. The production backend/application behavior is not changed.
+
+### M13 memory interpretation
+
+A short before/after RSS delta is still useful for regression tests but is not sufficient for soak evidence. M13 excludes warmup and estimates memory trend over many samples. Shared CI uses intentionally broad memory limits only to validate the sampler/evaluator path; its short-run slope must not be interpreted as a production leak or stability measurement.
+
 ## PR discipline
 
 Один milestone может состоять из нескольких PR. Каждый PR должен оставлять репозиторий в объяснимом состоянии и не включать необязательные refactoring.
