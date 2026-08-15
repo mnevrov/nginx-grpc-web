@@ -44,12 +44,17 @@ test-module:
 	  tests/protocol/test_module_binary.py::test_nginx_binary_unary \
 	  tests/protocol/test_module_text_request.py::test_nginx_text_unary_fixed_content_length_decodes_request \
 	  tests/protocol/test_module_text_request.py::test_nginx_text_unary_chunked_fragmentation \
-	  tests/protocol/test_module_text_request.py::test_nginx_rejects_malformed_text_request
+	  tests/protocol/test_module_text_request.py::test_nginx_rejects_malformed_text_request \
+	  tests/protocol/test_module_text_response.py::test_nginx_text_unary_response \
+	  tests/protocol/test_module_text_response.py::test_nginx_text_response_fragmented_native_frame_matches_envoy \
+	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy
 
 test-diff:
 	python3 -m pytest -q -m integration \
 	  tests/protocol/test_module_binary.py::test_nginx_binary_unary_matches_envoy \
-	  tests/protocol/test_module_text_request.py::test_nginx_text_request_semantics_match_envoy
+	  tests/protocol/test_module_text_request.py::test_nginx_text_request_semantics_match_envoy \
+	  tests/protocol/test_module_text_response.py::test_nginx_text_unary_response_matches_envoy \
+	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy
 
 test-browser:
 	cd tests/browser && npm test
