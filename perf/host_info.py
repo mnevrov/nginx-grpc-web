@@ -23,6 +23,7 @@ FINGERPRINT_FIELDS = (
     "cgroup_version",
     "gateway_cpuset",
     "backend_cpuset",
+    "loadgen_cpuset",
     "cpu_governors",
 )
 
@@ -62,23 +63,31 @@ def validate_preflight(info: dict[str, Any], *, strict: bool) -> list[dict[str, 
     def add(level: str, code: str, message: str) -> None:
         issues.append({"level": level, "code": code, "message": message})
 
-    gateway = str(info.get("gateway_cpuset", "") or "")
-    backend = str(info.get("backend_cpuset", "") or "")
-    if strict and not gateway:
-        add("error", "gateway_cpuset_missing", "controlled benchmark requires PERF_GATEWAY_CPUSET")
-    if strict and not backend:
-        add("error", "backend_cpuset_missing", "controlled benchmark requires PERF_BACKEND_CPUSET")
+    names = {
+        "gateway": str(info.get("gateway_cpuset", "") or ""),
+        "backend": str(info.get("backend_cpuset", "") or ""),
+        "loadgen": str(info.get("loadgen_cpuset", "") or ""),
+    }
+    if strict:
+        for name, value in names.items():
+            if not value:
+                add("error", f"{name}_cpuset_missing", f"controlled benchmark requires PERF_{name.upper()}_CPUSET")
 
+    parsed: dict[str, set[int]] = {}
     try:
-        gateway_cpus = parse_cpuset(gateway)
-        backend_cpus = parse_cpuset(backend)
+        parsed = {name: parse_cpuset(value) for name, value in names.items()}
     except ValueError as exc:
         add("error", "cpuset_invalid", str(exc))
-        gateway_cpus, backend_cpus = set(), set()
+        parsed = {name: set() for name in names}
 
-    overlap = gateway_cpus & backend_cpus
-    if overlap:
-        add("error", "cpuset_overlap", f"gateway/backend CPU sets overlap: {sorted(overlap)}")
+    for left, right in (("gateway", "backend"), ("gateway", "loadgen"), ("backend", "loadgen")):
+        overlap = parsed[left] & parsed[right]
+        if overlap:
+            add(
+                "error",
+                "cpuset_overlap",
+                f"{left}/{right} CPU sets overlap: {sorted(overlap)}",
+            )
 
     if str(info.get("cgroup_version", "")) != "2":
         add("error" if strict else "warning", "cgroup_v2_required", "cgroup v2 is required for release-quality CPU sampling")
@@ -146,7 +155,7 @@ def _cpu_governors() -> list[str]:
     return sorted(values)
 
 
-def collect_host_info(*, gateway_cpuset: str, backend_cpuset: str, strict: bool) -> dict[str, Any]:
+def collect_host_info(*, gateway_cpuset: str, backend_cpuset: str, loadgen_cpuset: str, strict: bool) -> dict[str, Any]:
     info: dict[str, Any] = {
         "version": 1,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -160,6 +169,7 @@ def collect_host_info(*, gateway_cpuset: str, backend_cpuset: str, strict: bool)
         "cgroup_version": _cgroup_version(),
         "gateway_cpuset": gateway_cpuset,
         "backend_cpuset": backend_cpuset,
+        "loadgen_cpuset": loadgen_cpuset,
         "cpu_governors": _cpu_governors(),
         "strict": strict,
     }
@@ -174,12 +184,14 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--gateway-cpuset", default=os.environ.get("PERF_GATEWAY_CPUSET", ""))
     parser.add_argument("--backend-cpuset", default=os.environ.get("PERF_BACKEND_CPUSET", ""))
+    parser.add_argument("--loadgen-cpuset", default=os.environ.get("PERF_LOADGEN_CPUSET", ""))
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
     result = collect_host_info(
         gateway_cpuset=args.gateway_cpuset,
         backend_cpuset=args.backend_cpuset,
+        loadgen_cpuset=args.loadgen_cpuset,
         strict=args.strict,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
