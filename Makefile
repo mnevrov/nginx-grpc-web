@@ -49,7 +49,9 @@ test-module:
 	  tests/protocol/test_module_text_response.py::test_nginx_text_response_fragmented_native_frame_matches_envoy \
 	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy \
 	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_is_incremental \
-	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_large_frames_are_not_whole_stream_buffered
+	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_large_frames_are_not_whole_stream_buffered \
+	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_survives_slow_consumer_backpressure \
+	  tests/protocol/test_module_streaming.py::test_nginx_long_stream_does_not_retain_every_encoded_frame
 
 test-diff:
 	python3 -m pytest -q -m integration \
