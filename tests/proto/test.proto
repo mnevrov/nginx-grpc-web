@@ -16,6 +16,10 @@ message StreamRequest {
   string message = 1;
   uint32 count = 2;
   uint32 delay_ms = 3;
+  bool empty = 4;
+  uint32 fail_after = 5;
+  int32 fail_code = 6;
+  string fail_message = 7;
 }
 
 message FailRequest {

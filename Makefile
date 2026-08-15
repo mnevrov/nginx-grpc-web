@@ -51,7 +51,13 @@ test-module:
 	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_is_incremental \
 	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_large_frames_are_not_whole_stream_buffered \
 	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_survives_slow_consumer_backpressure \
-	  tests/protocol/test_module_streaming.py::test_nginx_long_stream_does_not_retain_every_encoded_frame
+	  tests/protocol/test_module_streaming.py::test_nginx_long_stream_does_not_retain_every_encoded_frame \
+	  tests/protocol/test_module_failures.py::test_nginx_empty_stream_matches_envoy \
+	  tests/protocol/test_module_failures.py::test_nginx_midstream_failure_matches_envoy \
+	  tests/protocol/test_module_failures.py::test_nginx_grpc_timeout_matches_envoy \
+	  tests/protocol/test_module_failures.py::test_nginx_client_disconnect_cancels_upstream \
+	  tests/protocol/test_module_failures.py::test_nginx_unavailable_is_grpc_web_terminal_status \
+	  tests/protocol/test_module_failures.py::test_nginx_proxy_timeout_is_grpc_web_terminal_status
 
 test-diff:
 	python3 -m pytest -q -m integration \
@@ -59,7 +65,10 @@ test-diff:
 	  tests/protocol/test_module_text_request.py::test_nginx_text_request_semantics_match_envoy \
 	  tests/protocol/test_module_text_response.py::test_nginx_text_unary_response_matches_envoy \
 	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy \
-	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_matches_envoy_semantics_and_timing
+	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_matches_envoy_semantics_and_timing \
+	  tests/protocol/test_module_failures.py::test_nginx_empty_stream_matches_envoy \
+	  tests/protocol/test_module_failures.py::test_nginx_midstream_failure_matches_envoy \
+	  tests/protocol/test_module_failures.py::test_nginx_grpc_timeout_matches_envoy
 
 test-browser:
 	cd tests/browser && npm test

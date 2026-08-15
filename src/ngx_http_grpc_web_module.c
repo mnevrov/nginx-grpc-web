@@ -6,6 +6,7 @@
  * M3 adds incremental grpc-web-text request decoding.
  * M4 adds grpc-web-text unary response framing/base64 encoding.
  * M5 validates incremental server streaming and bounded buffer reuse.
+ * M6 normalizes cancellation/failure semantics and selected local proxy errors.
  */
 
 #include <ngx_config.h>
@@ -35,11 +36,14 @@ typedef struct {
     size_t decoded_request_size;
     ngx_chain_t *response_free;
     ngx_chain_t *response_busy;
+    ngx_uint_t local_grpc_status;
+    ngx_str_t local_grpc_message;
     unsigned active:1;
     unsigned text_response:1;
     unsigned transform_response:1;
     unsigned request_finished:1;
     unsigned trailers_sent:1;
+    unsigned local_error_response:1;
 } ngx_http_grpc_web_ctx_t;
 
 static void *ngx_http_grpc_web_create_loc_conf(ngx_conf_t *cf);
@@ -60,11 +64,17 @@ static ngx_flag_t ngx_http_grpc_web_is_native_grpc_response(
     ngx_http_request_t *r);
 static ngx_flag_t ngx_http_grpc_web_has_response_header(
     ngx_http_request_t *r, const char *name, size_t len);
+static ngx_flag_t ngx_http_grpc_web_map_local_error(
+    ngx_http_request_t *r, ngx_uint_t *grpc_status, ngx_str_t *grpc_message);
+static void ngx_http_grpc_web_set_response_content_type(
+    ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx);
 static ngx_int_t ngx_http_grpc_web_decode_text_request(
     ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
     ngx_chain_t *in, ngx_chain_t **out);
 static ngx_chain_t *ngx_http_grpc_web_build_trailer_frame(
     ngx_http_request_t *r);
+static ngx_chain_t *ngx_http_grpc_web_build_status_frame(
+    ngx_http_request_t *r, ngx_uint_t grpc_status, ngx_str_t *grpc_message);
 static ngx_int_t ngx_http_grpc_web_reserve_temp_buf(
     ngx_http_request_t *r, ngx_buf_t *b, size_t required);
 static ngx_int_t ngx_http_grpc_web_prepare_response_frame_buf(
@@ -76,6 +86,8 @@ static ngx_chain_t *ngx_http_grpc_web_encode_text_block(
 static ngx_int_t ngx_http_grpc_web_encode_text_response(
     ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
     ngx_chain_t *in, ngx_chain_t **out);
+static ngx_int_t ngx_http_grpc_web_local_error_body_filter(
+    ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx, ngx_chain_t *in);
 
 static ngx_http_request_body_filter_pt ngx_http_grpc_web_next_request_body_filter;
 static ngx_http_output_header_filter_pt ngx_http_grpc_web_next_header_filter;
@@ -259,6 +271,45 @@ ngx_http_grpc_web_has_response_header(ngx_http_request_t *r,
     }
 
     return 0;
+}
+
+static ngx_flag_t
+ngx_http_grpc_web_map_local_error(ngx_http_request_t *r,
+    ngx_uint_t *grpc_status, ngx_str_t *grpc_message)
+{
+    switch (r->headers_out.status) {
+    case NGX_HTTP_BAD_GATEWAY:
+    case NGX_HTTP_SERVICE_UNAVAILABLE:
+        *grpc_status = 14;
+        ngx_str_set(grpc_message, "upstream unavailable");
+        return 1;
+
+    case NGX_HTTP_GATEWAY_TIME_OUT:
+    case NGX_HTTP_REQUEST_TIME_OUT:
+        *grpc_status = 4;
+        ngx_str_set(grpc_message, "upstream timeout");
+        return 1;
+
+    default:
+        return 0;
+    }
+}
+
+static void
+ngx_http_grpc_web_set_response_content_type(ngx_http_request_t *r,
+    ngx_http_grpc_web_ctx_t *ctx)
+{
+    if (ctx->text_response) {
+        ngx_str_set(&r->headers_out.content_type,
+                    "application/grpc-web-text+proto");
+    } else {
+        ngx_str_set(&r->headers_out.content_type,
+                    "application/grpc-web+proto");
+    }
+
+    r->headers_out.content_type_len = r->headers_out.content_type.len;
+    r->headers_out.content_type_lowcase = NULL;
+    r->headers_out.content_type_hash = 0;
 }
 
 static ngx_int_t
@@ -521,7 +572,27 @@ ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
     }
 
     if (!ngx_http_grpc_web_is_native_grpc_response(r)) {
-        ctx->transform_response = 0;
+        if (!ngx_http_grpc_web_map_local_error(
+                r, &ctx->local_grpc_status, &ctx->local_grpc_message))
+        {
+            ctx->transform_response = 0;
+            return ngx_http_grpc_web_next_header_filter(r);
+        }
+
+        ctx->transform_response = 1;
+        ctx->local_error_response = 1;
+
+        r->headers_out.status = NGX_HTTP_OK;
+        ngx_str_null(&r->headers_out.status_line);
+        ngx_http_grpc_web_set_response_content_type(r, ctx);
+
+        if (r->headers_out.content_length != NULL) {
+            r->headers_out.content_length->hash = 0;
+            r->headers_out.content_length = NULL;
+        }
+        r->headers_out.content_length_n = -1;
+        r->expect_trailers = 0;
+
         return ngx_http_grpc_web_next_header_filter(r);
     }
 
@@ -530,17 +601,7 @@ ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
         && ngx_http_grpc_web_has_response_header(
             r, "grpc-status", sizeof("grpc-status") - 1));
 
-    if (ctx->text_response) {
-        ngx_str_set(&r->headers_out.content_type,
-                    "application/grpc-web-text+proto");
-    } else {
-        ngx_str_set(&r->headers_out.content_type,
-                    "application/grpc-web+proto");
-    }
-
-    r->headers_out.content_type_len = r->headers_out.content_type.len;
-    r->headers_out.content_type_lowcase = NULL;
-    r->headers_out.content_type_hash = 0;
+    ngx_http_grpc_web_set_response_content_type(r, ctx);
 
     if (trailers_only) {
         /*
@@ -668,6 +729,70 @@ ngx_http_grpc_web_build_trailer_frame(ngx_http_request_t *r)
     cl->next = NULL;
 
     r->expect_trailers = 0;
+    return cl;
+}
+
+static ngx_chain_t *
+ngx_http_grpc_web_build_status_frame(ngx_http_request_t *r,
+    ngx_uint_t grpc_status, ngx_str_t *grpc_message)
+{
+    size_t payload_len, status_len;
+    uint8_t header[GRPC_WEB_FRAME_HEADER_SIZE];
+    u_char status_buf[NGX_INT_T_LEN];
+    u_char *status_last;
+    ngx_buf_t *b;
+    ngx_chain_t *cl;
+    ngx_http_grpc_web_loc_conf_t *glcf;
+
+    status_last = ngx_sprintf(status_buf, "%ui", grpc_status);
+    status_len = (size_t) (status_last - status_buf);
+
+    payload_len = (sizeof("grpc-status:") - 1) + status_len + 2;
+    if (grpc_message->len > NGX_MAX_SIZE_T_VALUE - payload_len
+                            - (sizeof("grpc-message:") - 1) - 2)
+    {
+        return NGX_CHAIN_ERROR;
+    }
+    payload_len += (sizeof("grpc-message:") - 1) + grpc_message->len + 2;
+
+    glcf = ngx_http_get_module_loc_conf(r, ngx_http_grpc_web_module);
+    if (payload_len == 0 || payload_len > 0xffffffffu
+        || payload_len > glcf->max_frame_size
+        || payload_len > NGX_MAX_SIZE_T_VALUE - GRPC_WEB_FRAME_HEADER_SIZE)
+    {
+        return NGX_CHAIN_ERROR;
+    }
+
+    b = ngx_create_temp_buf(r->pool,
+                            GRPC_WEB_FRAME_HEADER_SIZE + payload_len);
+    if (b == NULL) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    grpc_web_frame_write_header(header, GRPC_WEB_TRAILER_FLAG,
+                                (uint32_t) payload_len);
+    b->last = ngx_cpymem(b->last, header, GRPC_WEB_FRAME_HEADER_SIZE);
+    b->last = ngx_cpymem(b->last, "grpc-status:",
+                         sizeof("grpc-status:") - 1);
+    b->last = ngx_cpymem(b->last, status_buf, status_len);
+    *b->last++ = CR;
+    *b->last++ = LF;
+    b->last = ngx_cpymem(b->last, "grpc-message:",
+                         sizeof("grpc-message:") - 1);
+    b->last = ngx_cpymem(b->last, grpc_message->data, grpc_message->len);
+    *b->last++ = CR;
+    *b->last++ = LF;
+
+    b->last_buf = 1;
+    b->last_in_chain = 1;
+
+    cl = ngx_alloc_chain_link(r->pool);
+    if (cl == NULL) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    cl->buf = b;
+    cl->next = NULL;
     return cl;
 }
 
@@ -948,6 +1073,65 @@ ngx_http_grpc_web_encode_text_response(ngx_http_request_t *r,
 }
 
 static ngx_int_t
+ngx_http_grpc_web_local_error_body_filter(ngx_http_request_t *r,
+    ngx_http_grpc_web_ctx_t *ctx, ngx_chain_t *in)
+{
+    ngx_flag_t last_buf;
+    ngx_int_t rc;
+    ngx_buf_t *b;
+    ngx_chain_t *cl, *encoded, *status_frame, *out;
+
+    last_buf = 0;
+
+    for (cl = in; cl != NULL; cl = cl->next) {
+        b = cl->buf;
+
+        if (ngx_buf_in_memory(b)) {
+            b->pos = b->last;
+        }
+        if (b->in_file) {
+            b->file_pos = b->file_last;
+        }
+        if (b->last_buf) {
+            last_buf = 1;
+        }
+    }
+
+    if (!last_buf) {
+        return NGX_OK;
+    }
+
+    status_frame = ngx_http_grpc_web_build_status_frame(
+        r, ctx->local_grpc_status, &ctx->local_grpc_message);
+    if (status_frame == NGX_CHAIN_ERROR) {
+        return NGX_ERROR;
+    }
+
+    ctx->trailers_sent = 1;
+
+    if (!ctx->text_response) {
+        return ngx_http_grpc_web_next_body_filter(r, status_frame);
+    }
+
+    encoded = ngx_http_grpc_web_encode_text_block(r, ctx,
+        status_frame->buf->pos,
+        (size_t) (status_frame->buf->last - status_frame->buf->pos),
+        1, 1);
+    if (encoded == NGX_CHAIN_ERROR) {
+        return NGX_ERROR;
+    }
+
+    out = encoded;
+    rc = ngx_http_grpc_web_next_body_filter(r, out);
+    ngx_chain_update_chains(r->pool,
+                            &ctx->response_free,
+                            &ctx->response_busy,
+                            &out,
+                            (ngx_buf_tag_t) &ngx_http_grpc_web_module);
+    return rc;
+}
+
+static ngx_int_t
 ngx_http_grpc_web_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
     ngx_int_t rc;
@@ -963,6 +1147,10 @@ ngx_http_grpc_web_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
     if (in == NULL) {
         return ngx_http_grpc_web_next_body_filter(r, NULL);
+    }
+
+    if (ctx->local_error_response) {
+        return ngx_http_grpc_web_local_error_body_filter(r, ctx, in);
     }
 
     if (ctx->text_response) {

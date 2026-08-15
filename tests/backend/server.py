@@ -13,34 +13,59 @@ import test_pb2  # noqa: E402
 import test_pb2_grpc  # noqa: E402
 
 
+def status_code(value: int) -> grpc.StatusCode:
+    mapping = {
+        3: grpc.StatusCode.INVALID_ARGUMENT,
+        4: grpc.StatusCode.DEADLINE_EXCEEDED,
+        5: grpc.StatusCode.NOT_FOUND,
+        13: grpc.StatusCode.INTERNAL,
+        14: grpc.StatusCode.UNAVAILABLE,
+    }
+    return mapping.get(value, grpc.StatusCode.UNKNOWN)
+
+
 class TestService(test_pb2_grpc.TestServiceServicer):
     async def Unary(self, request, context):
         context.set_trailing_metadata((("x-test-trailer", "unary-ok"),))
         return test_pb2.EchoReply(message=request.message, sequence=1)
 
     async def Stream(self, request, context):
+        if request.empty:
+            context.set_trailing_metadata((("x-test-trailer", "stream-empty"),))
+            return
+
         count = request.count or 3
         delay = (request.delay_ms or 250) / 1000.0
 
         context.set_trailing_metadata((("x-test-trailer", "stream-ok"),))
 
-        for i in range(count):
-            if context.cancelled():
-                return
-            await asyncio.sleep(delay)
-            yield test_pb2.EchoReply(
-                message=request.message,
-                sequence=i + 1,
-            )
+        try:
+            for i in range(count):
+                if context.cancelled():
+                    print(f"stream cancelled message={request.message}", flush=True)
+                    return
+
+                await asyncio.sleep(delay)
+                yield test_pb2.EchoReply(
+                    message=request.message,
+                    sequence=i + 1,
+                )
+
+                if request.fail_after and i + 1 >= request.fail_after:
+                    context.set_trailing_metadata((("x-test-trailer", "stream-fail"),))
+                    await context.abort(
+                        status_code(request.fail_code or 13),
+                        request.fail_message or "forced stream failure",
+                    )
+        except asyncio.CancelledError:
+            print(f"stream cancelled message={request.message}", flush=True)
+            raise
 
     async def Fail(self, request, context):
-        mapping = {
-            3: grpc.StatusCode.INVALID_ARGUMENT,
-            5: grpc.StatusCode.NOT_FOUND,
-            13: grpc.StatusCode.INTERNAL,
-        }
-        code = mapping.get(request.code, grpc.StatusCode.UNKNOWN)
-        await context.abort(code, request.message or "forced failure")
+        await context.abort(
+            status_code(request.code),
+            request.message or "forced failure",
+        )
 
 
 async def main():
