@@ -11,6 +11,12 @@ function readOptions() {
     delayMs: Number(params.get("delayMs") ?? "200"),
     code: Number(params.get("code") ?? "3"),
     message: params.get("message") ?? "browser",
+    empty: params.get("empty") === "1",
+    failAfter: Number(params.get("failAfter") ?? "0"),
+    failCode: Number(params.get("failCode") ?? "13"),
+    failMessage: params.get("failMessage") ?? "forced stream failure",
+    cancelAfter: Number(params.get("cancelAfter") ?? "0"),
+    grpcTimeout: params.get("grpcTimeout") ?? "",
   };
 }
 
@@ -21,11 +27,12 @@ export function App() {
 
   useEffect(() => {
     const options = optionsRef.current;
-    let cancelled = false;
+    let disposed = false;
+    let terminal = false;
     let stream = null;
 
     const publish = (next) => {
-      if (cancelled) return;
+      if (disposed) return;
       window.__grpcWebHarness = next;
       setState(next);
     };
@@ -33,6 +40,8 @@ export function App() {
     const runUnary = (promise) => {
       promise
         .then((msg) => {
+          if (terminal) return;
+          terminal = true;
           publish({
             status: "done",
             events: [
@@ -46,6 +55,8 @@ export function App() {
           });
         })
         .catch((err) => {
+          if (terminal) return;
+          terminal = true;
           publish({
             status: "error",
             events: [],
@@ -59,45 +70,56 @@ export function App() {
     if (options.rpc === "unary-binary") {
       runUnary(unaryBinary(options.endpoint, options.message));
       return () => {
-        cancelled = true;
+        disposed = true;
       };
     }
 
     if (options.rpc === "unary-text") {
       runUnary(unaryText(options.endpoint, options.message));
       return () => {
-        cancelled = true;
+        disposed = true;
       };
     }
 
     if (options.rpc === "fail-text") {
       runUnary(failText(options.endpoint, options.code, options.message));
       return () => {
-        cancelled = true;
+        disposed = true;
       };
     }
 
     stream = openStream(options.endpoint, options);
 
     const onData = (msg) => {
+      if (terminal) return;
+
       setState((prev) => {
-        const next = {
-          ...prev,
-          events: [
-            ...prev.events,
-            {
-              sequence: msg.sequence,
-              message: msg.message,
-              t: performance.now() - startedRef.current,
-            },
-          ],
-        };
+        const events = [
+          ...prev.events,
+          {
+            sequence: msg.sequence,
+            message: msg.message,
+            t: performance.now() - startedRef.current,
+          },
+        ];
+
+        if (options.cancelAfter && events.length >= options.cancelAfter) {
+          terminal = true;
+          stream.cancel();
+          const next = { status: "cancelled", events, error: null };
+          window.__grpcWebHarness = next;
+          return next;
+        }
+
+        const next = { ...prev, events };
         window.__grpcWebHarness = next;
         return next;
       });
     };
 
     const onError = (err) => {
+      if (terminal) return;
+      terminal = true;
       publish({
         status: "error",
         events: window.__grpcWebHarness?.events ?? [],
@@ -106,6 +128,8 @@ export function App() {
     };
 
     const onEnd = () => {
+      if (terminal) return;
+      terminal = true;
       setState((prev) => {
         const next = { ...prev, status: "done" };
         window.__grpcWebHarness = next;
@@ -118,10 +142,13 @@ export function App() {
     stream.on("end", onEnd);
 
     return () => {
-      cancelled = true;
-      // React StrictMode mounts effects twice in development. Cancel the first
-      // stream so the harness still observes exactly one production-like call.
-      stream.cancel();
+      disposed = true;
+      if (!terminal) {
+        terminal = true;
+        // React StrictMode mounts effects twice in development. Cancel the first
+        // stream so the harness still observes exactly one production-like call.
+        stream.cancel();
+      }
     };
   }, []);
 
