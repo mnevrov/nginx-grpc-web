@@ -16,10 +16,14 @@ class UnaryRequest {
 }
 
 class StreamRequest {
-  constructor(message = "", count = 3, delayMs = 250) {
-    this.message = message;
-    this.count = count;
-    this.delayMs = delayMs;
+  constructor(options = {}) {
+    this.message = options.message ?? "browser";
+    this.count = options.count ?? 3;
+    this.delayMs = options.delayMs ?? 250;
+    this.empty = options.empty ?? false;
+    this.failAfter = options.failAfter ?? 0;
+    this.failCode = options.failCode ?? 0;
+    this.failMessage = options.failMessage ?? "";
   }
 
   serializeBinary() {
@@ -27,6 +31,10 @@ class StreamRequest {
     if (this.message) w.writeString(1, this.message);
     if (this.count) w.writeUint32(2, this.count);
     if (this.delayMs) w.writeUint32(3, this.delayMs);
+    if (this.empty) w.writeBool(4, this.empty);
+    if (this.failAfter) w.writeUint32(5, this.failAfter);
+    if (this.failCode) w.writeInt32(6, this.failCode);
+    if (this.failMessage) w.writeString(7, this.failMessage);
     return w.getResultBuffer();
   }
 }
@@ -142,16 +150,17 @@ export function failText(baseUrl, code = 3, message = "forced failure") {
 
 export function openStream(baseUrl, options = {}) {
   const client = new grpcWeb.GrpcWebClientBase({ format: "text" });
-  const request = new StreamRequest(
-    options.message ?? "browser",
-    options.count ?? 3,
-    options.delayMs ?? 250,
-  );
+  const request = new StreamRequest(options);
+  const metadata = {};
+
+  if (options.grpcTimeout) {
+    metadata["grpc-timeout"] = options.grpcTimeout;
+  }
 
   return client.serverStreaming(
     `${baseUrl}/grpcwebtest.TestService/Stream`,
     request,
-    {},
+    metadata,
     streamMethod,
   );
 }
