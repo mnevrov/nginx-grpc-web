@@ -9,7 +9,8 @@ help:
 	  'make reference-up    - backend + Envoy oracle' \
 	  'make module-up       - backend + NGINX module' \
 	  'make test-reference  - Envoy integration baseline' \
-	  'make test-module     - NGINX integration tests (milestone gated)' \
+	  'make test-module     - NGINX M2 binary unary integration test' \
+	  'make test-diff       - Envoy vs NGINX M2 differential test' \
 	  'make test-browser    - browser grpc-web tests' \
 	  'make down            - stop test stack'
 
@@ -39,10 +40,10 @@ test-reference:
 	python3 -m pytest -q -m integration tests/protocol/test_reference_smoke.py
 
 test-module:
-	@echo "M2+: add enabled module integration tests; see docs/IMPLEMENTATION_PLAN.md"
+	python3 -m pytest -q -m integration tests/protocol/test_module_binary.py::test_nginx_binary_unary
 
 test-diff:
-	@echo "M2+: differential harness is milestone-gated; see prompts/05_DIFFERENTIAL_TESTS.md"
+	python3 -m pytest -q -m integration tests/protocol/test_module_binary.py::test_nginx_binary_unary_matches_envoy
 
 test-browser:
 	cd tests/browser && npm test
