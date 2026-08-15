@@ -6,18 +6,25 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 func newHTTPTransport(cfg config) (*http.Transport, error) {
 	transport := &http.Transport{
 		DisableCompression:    true,
-		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          cfg.Streams * 2,
 		MaxIdleConnsPerHost:   cfg.Streams * 2,
 		MaxConnsPerHost:       0,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
+	}
+
+	// Keep the original cleartext HTTP/1.1 benchmark transport unchanged.
+	// HTTP/2 is an explicit property of the TLS/H2 frontend rather than a
+	// global client setting shared by both benchmark baselines.
+	if cfg.RequireHTTP2 || strings.HasPrefix(strings.ToLower(cfg.URL), "https://") {
+		transport.ForceAttemptHTTP2 = true
 	}
 
 	if cfg.CAFile == "" && cfg.TLSServerName == "" {
