@@ -32,6 +32,7 @@ class HostInfoTests(unittest.TestCase):
     def test_strict_preflight_rejects_overlapping_cpu_sets(self):
         issues = validate_preflight(
             {
+                "online_cpus": "0-15",
                 "gateway_cpuset": "0-3",
                 "backend_cpuset": "4-7",
                 "loadgen_cpuset": "3,8-9",
@@ -45,6 +46,7 @@ class HostInfoTests(unittest.TestCase):
     def test_strict_preflight_requires_all_three_cpu_sets(self):
         issues = validate_preflight(
             {
+                "online_cpus": "0-15",
                 "gateway_cpuset": "",
                 "backend_cpuset": "",
                 "loadgen_cpuset": "",
@@ -57,6 +59,27 @@ class HostInfoTests(unittest.TestCase):
         self.assertIn("gateway_cpuset_missing", codes)
         self.assertIn("backend_cpuset_missing", codes)
         self.assertIn("loadgen_cpuset_missing", codes)
+
+    def test_preflight_rejects_offline_configured_cpu(self):
+        issues = validate_preflight(
+            {
+                "online_cpus": "0-7",
+                "gateway_cpuset": "0-3",
+                "backend_cpuset": "4-5",
+                "loadgen_cpuset": "6-8",
+                "cpu_governors": ["performance"],
+                "cgroup_version": "2",
+            },
+            strict=True,
+        )
+        self.assertTrue(
+            any(
+                item["level"] == "error"
+                and item["code"] == "cpuset_offline"
+                and "8" in item["message"]
+                for item in issues
+            )
+        )
 
 
 if __name__ == "__main__":
