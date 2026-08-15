@@ -4,16 +4,25 @@ services:
       context: .
       dockerfile: tests/backend/Dockerfile
 
+  fault-backend:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./tests/fault_backend/server.mjs:/app/server.mjs:ro
+    command: ["node", "/app/server.mjs"]
+
   envoy:
     image: envoyproxy/envoy:v1.38.0
     depends_on:
       - backend
+      - fault-backend
     volumes:
       - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
     ports:
       - "18081:8081"
       - "18083:8083"
       - "18085:8085"
+      - "18087:8087"
 
   nginx:
     build:
@@ -23,7 +32,9 @@ services:
         NGINX_VERSION: "${NGINX_VERSION:-1.30.2}"
     depends_on:
       - backend
+      - fault-backend
     ports:
       - "18080:8080"
       - "18082:8082"
       - "18084:8084"
+      - "18086:8086"

@@ -17,6 +17,7 @@ function readOptions() {
     failMessage: params.get("failMessage") ?? "forced stream failure",
     cancelAfter: Number(params.get("cancelAfter") ?? "0"),
     grpcTimeout: params.get("grpcTimeout") ?? "",
+    faultMode: params.get("faultMode") ?? "",
   };
 }
 

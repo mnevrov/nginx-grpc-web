@@ -123,6 +123,47 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 
+    - name: grpc_web_transport_faults
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8087
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: grpc_web_transport_faults
+                codec_type: AUTO
+                route_config:
+                  name: transport_fault_route
+                  virtual_hosts:
+                    - name: transport_fault
+                      domains: ["*"]
+                      cors:
+                        allow_origin_string_match:
+                          - safe_regex:
+                              regex: ".*"
+                        allow_methods: "POST, OPTIONS"
+                        allow_headers: "content-type,x-grpc-web,x-user-agent,grpc-timeout,authorization,x-fault-mode"
+                        expose_headers: "grpc-status,grpc-message"
+                        max_age: "600"
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: grpc_fault_backend
+                            timeout: 2s
+                http_filters:
+                  - name: envoy.filters.http.grpc_web
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
+                  - name: envoy.filters.http.cors
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
   clusters:
     - name: grpc_backend
       connect_timeout: 1s
@@ -138,6 +179,21 @@ static_resources:
                     socket_address:
                       address: backend
                       port_value: 50051
+
+    - name: grpc_fault_backend
+      connect_timeout: 1s
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      http2_protocol_options: {}
+      load_assignment:
+        cluster_name: grpc_fault_backend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: fault-backend
+                      port_value: 50052
 
     - name: grpc_dead_backend
       connect_timeout: 0.1s

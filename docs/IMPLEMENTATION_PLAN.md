@@ -98,28 +98,53 @@ The actual compatibility gap was local NGINX gateway errors. A dead upstream pro
 
 The application mid-stream test uses a valid gRPC terminal status (`context.abort()`), not a raw transport failure. HTTP/2 `RST_STREAM` / TCP reset after DATA remains a separate M7 fault-injection case.
 
-## M7 — Hardening
+## M7 — Hardening ✅
 
-- raw HTTP/2 `RST_STREAM` / TCP reset fault injection before and after DATA;
-- size-limit boundary tests for request, DATA frame and trailer block;
-- integer overflow/underflow review and boundary corpus;
-- malformed gRPC frame corpus;
-- malformed/incomplete Base64 fuzz corpus;
-- ASAN/UBSAN builds and tests;
-- long-stream/leak/lifecycle checks beyond RSS smoke;
-- cancellation/backpressure stress under repeated requests;
-- logging review: useful diagnostics without request metadata/payload leakage;
-- configuration misuse tests and safe failure behavior.
+- exact activation only for the four supported v0.1 media-type tokens;
+- optional media-type parameters after `;` supported without accepting lookalike suffixes;
+- `+json`, `+protoevil` and arbitrary prefix/suffix variants remain outside module scope;
+- ASAN/UBSAN gate for pure C Base64/frame state machines;
+- libFuzzer targets for incremental Base64 and gRPC frame parser, `20 000` bounded runs each in CI;
+- raw HTTP/2 fault backend independent of the gRPC framework;
+- `RST_STREAM` before response headers compared with Envoy through the real React/`grpc-web` client;
+- `RST_STREAM` and TCP reset after completed DATA verify DATA preservation and bounded lifecycle;
+- oversized native frame declaration rejected before scratch-buffer memory amplification;
+- truncated native frame / incomplete EOF cannot poison worker state;
+- DATA followed by HTTP/2 EOF without native gRPC trailers cannot become false `grpc-status: 0`;
+- repeated after-DATA transport faults gated by `<16 MiB` RSS delta;
+- repeated downstream disconnect/cancellation stress gated by `<16 MiB` RSS delta;
+- malformed request/logging regression verifies that request payload and `Authorization` secrets are not written to NGINX logs.
 
-**Exit:** sanitizer/fuzz/fault-injection suite green and no known unbounded memory, parser-safety or transport-reset defects remain in supported scope.
+**Exit:** sanitizer/fuzz/fault-injection suite green; supported parser and streaming paths have no known unbounded-memory, false-success, media-type-confusion or transport-reset lifecycle defect.
 
-## M8 — Compatibility
+### M7 media-type finding
 
-- NGINX stable + mainline;
-- GCC + Clang;
-- browser matrix;
-- documentation;
-- rollout guide.
+The initial hardening regression exposed a real production bug: content type detection used prefix comparison, so `application/grpc-web+json`, `application/grpc-web+protoevil` and similar values activated the module. The production change in M7 is deliberately narrow: exact token matching for the four supported media types, with optional parameters handled after `;`.
+
+### M7 transport-reset finding
+
+A raw upstream transport reset is not equivalent to a valid application-level gRPC failure. In particular, when the HTTP/2 fault backend sends one completed DATA frame and then `RST_STREAM`, the Envoy reference delivers that DATA to the browser but may leave the `grpc-web` RPC in `running` without a synthetic terminal `error/status/end` event.
+
+Therefore M7 does **not** invent a stronger terminal contract for NGINX than the oracle provides:
+
+- reset before DATA/headers: compare observable browser error semantics with Envoy;
+- reset after completed DATA: require byte-exact DATA preservation, bounded memory/lifecycle and a healthy next request;
+- missing native trailers: never synthesize false `grpc-status: 0`.
+
+This distinction keeps the test oracle semantic rather than accidentally encoding an implementation-specific expectation.
+
+## M8 — Compatibility & rollout
+
+- current NGINX stable + mainline compatibility matrix;
+- GCC + Clang module builds;
+- Chromium + Firefox + WebKit browser matrix where supported by `grpc-web`/Playwright;
+- installation and packaging instructions for the dynamic module;
+- production NGINX configuration examples;
+- observability and operational guidance;
+- safe Envoy -> NGINX rollout/canary/rollback guide;
+- final release checklist and versioned artifact guidance.
+
+**Exit:** supported build/runtime matrix documented and green; operators have a reproducible installation, migration, verification and rollback procedure for v0.1.
 
 ## PR discipline
 
