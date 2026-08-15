@@ -47,14 +47,17 @@ test-module:
 	  tests/protocol/test_module_text_request.py::test_nginx_rejects_malformed_text_request \
 	  tests/protocol/test_module_text_response.py::test_nginx_text_unary_response \
 	  tests/protocol/test_module_text_response.py::test_nginx_text_response_fragmented_native_frame_matches_envoy \
-	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy
+	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy \
+	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_is_incremental \
+	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_large_frames_are_not_whole_stream_buffered
 
 test-diff:
 	python3 -m pytest -q -m integration \
 	  tests/protocol/test_module_binary.py::test_nginx_binary_unary_matches_envoy \
 	  tests/protocol/test_module_text_request.py::test_nginx_text_request_semantics_match_envoy \
 	  tests/protocol/test_module_text_response.py::test_nginx_text_unary_response_matches_envoy \
-	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy
+	  tests/protocol/test_module_text_response.py::test_nginx_text_nonzero_status_and_message_match_envoy \
+	  tests/protocol/test_module_streaming.py::test_nginx_text_server_stream_matches_envoy_semantics_and_timing
 
 test-browser:
 	cd tests/browser && npm test
