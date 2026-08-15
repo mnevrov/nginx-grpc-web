@@ -21,6 +21,16 @@ jobs:
       - run: pip install -r tests/protocol/requirements.txt
       - run: make unit
 
+  perf-loadgen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - working-directory: perf/loadgen
+        run: go test ./...
+
   hardening:
     runs-on: ubuntu-latest
     steps:
