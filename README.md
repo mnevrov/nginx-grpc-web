@@ -34,7 +34,8 @@ Envoy используется в тестовом стенде как **referen
 - incremental response transformation;
 - преобразование native gRPC trailers в gRPC-Web trailer frame;
 - корректную передачу `grpc-status`, `grpc-message`, metadata;
-- server streaming без буферизации всего ответа.
+- server streaming без буферизации всего ответа;
+- нормализацию выбранных локальных NGINX gateway errors в terminal gRPC-Web status.
 
 Модуль **не** отвечает за:
 
@@ -65,11 +66,13 @@ Envoy используется в тестовом стенде как **referen
 | Native gRPC backend | ✅ |
 | gRPC trailers/status | ✅ |
 | Client cancellation | ✅ |
+| Deadline / `grpc-timeout` | ✅ |
+| Local upstream unavailable / timeout normalization | ✅ |
 | CORS | вне scope |
 | client streaming | вне scope |
 | bidi streaming | вне scope |
 
-Таблица выше описывает целевой scope `v0.1`, а не текущую milestone-готовность. Актуальное состояние реализации приведено ниже.
+Таблица выше описывает целевой scope `v0.1`; hardening и compatibility matrix продолжаются в M7/M8.
 
 ## Быстрый старт
 
@@ -85,23 +88,21 @@ make reference-up
 make test-reference
 ```
 
-Для реализованных M2–M5 путей:
+Для реализованных M2–M6 путей:
 
 ```bash
 # backend + NGINX module
 make module-up
 
-# binary/text unary + text server-streaming integration,
-# включая slow-consumer и long-stream RSS regression
+# unary/streaming/failure integration,
+# включая backpressure, RSS, cancellation и local gateway errors
 make test-module
 
-# canonical Envoy ↔ NGINX comparison,
-# включая streaming semantics/timing shape
+# canonical Envoy ↔ NGINX comparison
 make reference-up
 make test-diff
 
-# real React/grpc-web client in Chromium:
-# binary unary + text unary + text server streaming against Envoy and NGINX
+# real React/grpc-web client in Chromium
 make test-browser
 ```
 
@@ -128,7 +129,7 @@ AGENTS.md              обязательные правила для агент
 
 ## Принцип oracle
 
-Envoy считается reference implementation для наблюдаемого поведения, но тесты не должны требовать бессмысленного byte-for-byte совпадения Base64 chunk boundaries.
+Envoy считается reference implementation для наблюдаемого поведения, но тесты не требуют бессмысленного byte-for-byte совпадения Base64 chunk boundaries.
 
 Сравнивается **каноническая семантика**:
 
@@ -140,13 +141,16 @@ Envoy считается reference implementation для наблюдаемог�
 - `grpc-message`;
 - порядок событий;
 - отсутствие искусственной буферизации stream;
-- cancellation/error semantics.
+- cancellation/error semantics;
+- React-visible status для gateway failures.
 
 ## Текущее состояние
 
-M0/M1 завершены.
+### M0–M1 — oracle и module skeleton ✅
 
-M2 реализует binary unary path:
+Собраны воспроизводимый Envoy reference harness и динамический NGINX module с `grpc_web on|off`.
+
+### M2 — binary unary ✅
 
 - gRPC-Web binary request headers нормализуются для native `ngx_http_grpc_module`;
 - binary request/response DATA framing проходит без protobuf parsing;
@@ -154,59 +158,75 @@ M2 реализует binary unary path:
 - NGINX и Envoy сравниваются canonical differential test;
 - тот же React `grpc-web` binary client проверяется через Playwright против обоих gateway.
 
-M3 реализует request-side `grpc-web-text`:
+### M3 — grpc-web-text request ✅
 
 - Base64 декодируется statefully между произвольными request-body buffers;
 - fixed `Content-Length` и chunked downstream requests поддерживаются отдельно;
 - encoded downstream `Content-Length` не уходит в native gRPC upstream как decoded length;
-- отдельный zero-length terminal callback передаётся как NGINX special control buffer, а не как пустой temporary data buffer;
 - malformed/incomplete Base64 отклоняется с `400`;
 - fragmentation и request semantics сверяются с Envoy.
 
-M4 завершает `grpc-web-text` unary end-to-end:
+### M4 — grpc-web-text response ✅
 
-- response text mode выбирается по `Accept: application/grpc-web-text[+proto]`, независимо от request `Content-Type`;
+- response text mode выбирается по `Accept: application/grpc-web-text[+proto]`;
 - native gRPC frame может пересекать произвольное число NGINX upstream buffers;
 - модуль буферизует только текущий gRPC frame, а не весь HTTP response;
 - каждый завершённый native gRPC frame Base64-кодируется отдельно;
-- native trailers преобразуются в `0x80 | uint32 length | CRLF trailer block`, после чего Base64-кодируются отдельным terminal block;
+- native trailers преобразуются в `0x80 | uint32 length | CRLF trailer block`;
 - `grpc-status`, `grpc-message` и trailing metadata сохраняются;
-- локальные HTTP-ошибки NGINX не пропускаются через native-gRPC response parser;
-- upstream trailers-only `HEADERS+END_STREAM` поддерживается отдельно: stock `ngx_http_grpc_module` представляет такой status как обычные response headers, поэтому модуль сохраняет пустой body и только переписывает media type;
-- большой unary response проверяется с `grpc_buffer_size 1k`, чтобы один native frame гарантированно пересекал несколько upstream buffers;
-- успешный text unary и non-zero gRPC status/message проходят через тот же реальный React/`grpc-web` клиент против Envoy и NGINX.
+- trailers-only `HEADERS+END_STREAM` поддерживается отдельно.
 
-M5 добавляет и доказывает реальный `grpc-web-text` server streaming:
+### M5 — server streaming и bounded memory ✅
 
-- incremental protocol decoder в тестах выдаёт frame сразу после получения достаточного количества HTTP/Base64 данных;
-- backend отправляет несколько сообщений с контролируемыми паузами, а NGINX сохраняет эти паузы на downstream;
-- первое React `data` event наблюдается, пока RPC ещё имеет состояние `running`, то есть response не буферизуется до EOF;
-- streaming response с DATA frame >8 KiB проверяется при `grpc_buffer_size 1k`;
-- final trailers после нескольких DATA frames сохраняются и совпадают с Envoy;
-- slow-consumer regression проверяет корректность при downstream backpressure;
-- long-stream RSS regression проверяет, что рабочая память не растёт пропорционально всему объёму stream.
+- первое React `data` event наблюдается до завершения RPC;
+- backend inter-message delays сохраняются на downstream;
+- большие DATA frames проходят при `grpc_buffer_size 1k` и пересекают несколько upstream buffers;
+- final trailers после нескольких DATA frames сохраняются;
+- slow-consumer regression проверяет backpressure;
+- long-stream RSS regression проверяет bounded memory lifecycle.
 
-### Почему M5 потребовал изменение memory lifecycle
+Первоначальный M5 stress на 480 сообщений примерно по 64 KiB выявил удержание per-frame allocations в `r->pool`: при ~40 MiB gRPC-Web text output RSS вырос на **70.2 MiB**. После перехода на reusable native-frame scratch buffer и NGINX `free`/`busy` chains тот же тест проходит с gate `<32 MiB`.
 
-Первый M5 timing/browser прогон прошёл без изменений production C-кода: существующий M4 `flush=1` действительно отдавал каждый завершённый frame сразу. Однако stress-тест на 480 сообщений примерно по 64 KiB выявил другую проблему: Base64 output и frame scratch выделялись из `r->pool` для каждого сообщения и удерживались до завершения долгого request. При примерно 40 MiB gRPC-Web text output RSS NGINX вырос на **70.2 MiB**.
+### M6 — cancellation and failures ✅
 
-M5 заменяет эту схему на bounded reuse:
+M6 сначала доказал, что application-level failure semantics уже корректно наследуются от stock `ngx_http_grpc_module` без изменения production path:
 
-- native gRPC frame собирается в переиспользуемый scratch buffer, который растёт только до необходимой максимальной ёмкости;
-- Base64 output buffers проходят через стандартные для NGINX `free`/`busy` chains с `ngx_chain_update_chains()`;
-- отправленные tagged buffers возвращаются в `free` chain и используются следующими DATA frames;
-- long-stream regression требует peak RSS delta `< 32 MiB` на том же stress-case.
+- clean empty server stream;
+- non-zero gRPC status после одного или нескольких DATA frames;
+- `grpc-timeout` / `DEADLINE_EXCEEDED`;
+- downstream client disconnect / browser `cancel()` с закрытием upstream RPC.
 
-После buffer reuse этот RSS gate проходит, при этом streaming timing, slow consumer и Envoy differential semantics остаются зелёными.
+Отдельный browser oracle выявил реальный gap только для локальных proxy errors. До M6 NGINX возвращал обычные HTML `502/504`, и `grpc-web` интерпретировал их как `UNKNOWN (2)`, тогда как Envoy давал семантически полезный terminal gRPC status.
 
-### Последняя завершённая M4 валидация
+M6 добавляет узкую нормализацию **только для уже распознанных grpc-web requests**:
+
+| Local HTTP status | Terminal gRPC status | Message |
+|---|---:|---|
+| `502`, `503` | `14 UNAVAILABLE` | `upstream unavailable` |
+| `504`, `408` | `4 DEADLINE_EXCEEDED` | `upstream timeout` |
+
+Для этих случаев модуль:
+
+1. заменяет downstream HTTP status на `200`;
+2. выставляет соответствующий gRPC-Web media type;
+3. отбрасывает стандартный NGINX HTML error body;
+4. формирует единственный terminal trailer frame `0x80 | length | grpc-status/grpc-message`;
+5. в text mode Base64-кодирует этот frame существующим bounded output path.
+
+Raw protocol regressions требуют именно корректный gRPC-Web wire response, а Playwright проверяет итоговый code через настоящий `grpc-web` client. Application mid-stream failure дополнительно проверяется на сохранение уже полученных DATA перед terminal status.
+
+**Граница M6:** сценарий `context.abort()` после DATA покрывает корректный gRPC terminal status, но не имитирует сырой HTTP/2 `RST_STREAM` или TCP reset после начала response. Такой transport-level fault injection вынесен в M7 hardening.
+
+### Последняя M6 валидация
+
+Functional head `d99dc8fe02991c1826b7ad68d4c22fe427c34987` прошёл полный CI:
 
 - unit tests — ✅;
 - dynamic module build на NGINX 1.30.2 — ✅;
 - dynamic module build на NGINX 1.31.1 — ✅;
 - Envoy reference — `2 passed`;
-- NGINX module integration — `13 passed`;
-- Envoy ↔ NGINX differential — `4 passed`;
-- React/`grpc-web`/Chromium — `7 passed`.
+- NGINX module integration — `23 passed`;
+- Envoy ↔ NGINX differential — `8 passed`;
+- React/`grpc-web`/Chromium — `18 passed`.
 
-Следующий milestone после M5 — **M6: cancellation and failures**: browser cancel, backend reset/unavailable, timeout/deadline, empty stream и расширенная failure matrix.
+Следующий milestone — **M7: hardening**: sanitizers, malformed/fuzz corpus, transport-level reset fault injection, overflow/size-limit review, leak/lifecycle checks и logging review.
