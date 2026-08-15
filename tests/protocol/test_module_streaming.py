@@ -32,14 +32,22 @@ def protobuf_string_field(field_number: int, value: str) -> bytes:
     return bytes([(field_number << 3) | 2]) + varint(len(raw)) + raw
 
 
-def stream_request(message: str, count: int, delay_ms: int) -> bytes:
-    return (
+def stream_request(
+    message: str,
+    count: int,
+    delay_ms: int,
+    response_payload_bytes: int = 0,
+) -> bytes:
+    payload = (
         protobuf_string_field(1, message)
         + bytes([0x10])
         + varint(count)
         + bytes([0x18])
         + varint(delay_ms)
     )
+    if response_payload_bytes:
+        payload += bytes([0x40]) + varint(response_payload_bytes)
+    return payload
 
 
 def expected_reply(message: str, sequence: int) -> bytes:
@@ -86,9 +94,15 @@ def observe_text_stream(
     count: int = 3,
     delay_ms: int = 250,
     consumer_delay_ms: int = 0,
+    response_payload_bytes: int = 0,
     timeout: float = 10,
 ) -> StreamObservation:
-    payload = stream_request(message, count, delay_ms)
+    payload = stream_request(
+        message,
+        count,
+        delay_ms,
+        response_payload_bytes=response_payload_bytes,
+    )
     encoded = base64.b64encode(encode_data_frame(payload))
 
     started = time.monotonic()
@@ -236,6 +250,30 @@ def test_nginx_text_server_stream_large_frames_are_not_whole_stream_buffered():
     assert_incremental(observation, count=count, delay_ms=delay_ms)
     assert [frame.payload for frame in observation.data_frames] == [
         expected_reply(message, sequence) for sequence in range(1, count + 1)
+    ]
+
+
+@pytest.mark.integration
+def test_nginx_text_server_stream_multi_megabyte_frames_are_incremental():
+    count = 2
+    delay_ms = 250
+    response_payload_bytes = 4 * 1024 * 1024
+    marker = "multi-megabyte-stream-"
+    expected_message = marker + ("x" * (response_payload_bytes - len(marker)))
+
+    observation = observe_text_stream(
+        MODULE,
+        message=marker,
+        count=count,
+        delay_ms=delay_ms,
+        response_payload_bytes=response_payload_bytes,
+        timeout=30,
+    )
+
+    assert_incremental(observation, count=count, delay_ms=delay_ms)
+    assert [frame.payload for frame in observation.data_frames] == [
+        expected_reply(expected_message, sequence)
+        for sequence in range(1, count + 1)
     ]
 
 
