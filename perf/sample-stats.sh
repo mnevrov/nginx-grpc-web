@@ -13,7 +13,7 @@ services=("$@")
 interval=${PERF_STATS_INTERVAL:-0.10}
 
 mkdir -p "$(dirname "$output")"
-printf 'timestamp\tcontainer\tcpu_usage_usec\tmemory_bytes\n' > "$output"
+printf 'timestamp\tcontainer\tcpu_usage_usec\trss_bytes\tmemory_current_bytes\n' > "$output"
 
 declare -a names=()
 declare -a cgroups=()
@@ -41,7 +41,7 @@ for service in "${services[@]}"; do
   fi
 
   cgroup_dir="/sys/fs/cgroup${cgroup_rel}"
-  if [[ ! -r "$cgroup_dir/cpu.stat" || ! -r "$cgroup_dir/memory.current" ]]; then
+  if [[ ! -r "$cgroup_dir/cpu.stat" || ! -r "$cgroup_dir/memory.current" || ! -r "$cgroup_dir/cgroup.procs" ]]; then
     echo "cannot read cgroup v2 metrics for $service at $cgroup_dir" >&2
     exit 1
   fi
@@ -53,13 +53,29 @@ done
 while true; do
   ts=$(date +%s.%N)
   for i in "${!names[@]}"; do
-    cpu=$(awk '$1 == "usage_usec" { print $2; exit }' "${cgroups[$i]}/cpu.stat")
-    mem=$(cat "${cgroups[$i]}/memory.current")
+    cgroup_dir=${cgroups[$i]}
+    cpu=$(awk '$1 == "usage_usec" { print $2; exit }' "$cgroup_dir/cpu.stat")
+    mem=$(cat "$cgroup_dir/memory.current")
+
+    # Match the RSS convention already used by the project's lifecycle tests:
+    # sum VmRSS for all processes in the container cgroup. This intentionally
+    # remains distinct from memory.current, which also includes cgroup cache and
+    # other charged memory.
+    rss_kb=0
+    while read -r process_pid; do
+      if [[ -r "/proc/$process_pid/status" ]]; then
+        value=$(awk '$1 == "VmRSS:" { print $2; exit }' "/proc/$process_pid/status")
+        rss_kb=$((rss_kb + ${value:-0}))
+      fi
+    done < "$cgroup_dir/cgroup.procs"
+    rss_bytes=$((rss_kb * 1024))
+
     if [[ -z "$cpu" || -z "$mem" ]]; then
       echo "failed to read cgroup metrics for ${names[$i]}" >&2
       exit 1
     fi
-    printf '%s\t%s\t%s\t%s\n' "$ts" "${names[$i]}" "$cpu" "$mem" >> "$output"
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "$ts" "${names[$i]}" "$cpu" "$rss_bytes" "$mem" >> "$output"
   done
   sleep "$interval"
 done
