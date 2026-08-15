@@ -49,6 +49,8 @@ PACKAGE_DIR="$RELEASE_OUTPUT_DIR/artifacts/nginx-${NGINX_VERSION}-${BUILD_CC}-li
 args=(
   --repo-root "$ROOT"
   --release-version "$RELEASE_VERSION"
+  --nginx-version "$NGINX_VERSION"
+  --compiler "$BUILD_CC"
   --gates "$RELEASE_OUTPUT_DIR/gates.json"
   --package-dir "$PACKAGE_DIR"
   --controlled-dir "$RELEASE_OUTPUT_DIR/controlled"
