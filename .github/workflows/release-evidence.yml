@@ -57,7 +57,7 @@ jobs:
 
           gates = {
               name: {"passed": True, "commit": sha, "evidence_class": "harness_only"}
-              for name in ("protocol", "differential", "browser", "hardening")
+              for name in ("compatibility", "protocol", "differential", "browser", "hardening")
           }
           (root / "gates.json").write_text(json.dumps(gates, indent=2) + "\n")
           (controlled / "manifest.json").write_text(json.dumps({
@@ -117,6 +117,7 @@ jobs:
           assert result["verdict"] == "inconclusive", result
           assert result["mechanics_pass"] is True, result
           assert result["blockers"] == [], result
+          assert result["gates"]["compatibility"]["passed"] is True, result
           assert "harness_only" in result["advisory"], result
           assert result["raw_revalidation"]["valid"] is None, result
           assert result["raw_revalidation"]["skipped"] == "harness_only", result
