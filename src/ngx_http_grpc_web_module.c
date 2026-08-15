@@ -34,6 +34,7 @@ typedef struct {
     size_t decoded_request_size;
     unsigned active:1;
     unsigned text_response:1;
+    unsigned transform_response:1;
     unsigned request_finished:1;
     unsigned trailers_sent:1;
 } ngx_http_grpc_web_ctx_t;
@@ -52,6 +53,8 @@ static ngx_int_t ngx_http_grpc_web_body_filter(ngx_http_request_t *r,
 
 static ngx_int_t ngx_http_grpc_web_ensure_te(ngx_http_request_t *r);
 static ngx_flag_t ngx_http_grpc_web_accepts_text(ngx_http_request_t *r);
+static ngx_flag_t ngx_http_grpc_web_is_native_grpc_response(
+    ngx_http_request_t *r);
 static ngx_int_t ngx_http_grpc_web_decode_text_request(
     ngx_http_request_t *r, ngx_http_grpc_web_ctx_t *ctx,
     ngx_chain_t *in, ngx_chain_t **out);
@@ -194,6 +197,25 @@ ngx_http_grpc_web_accepts_text(ngx_http_request_t *r)
     }
 
     return 0;
+}
+
+static ngx_flag_t
+ngx_http_grpc_web_is_native_grpc_response(ngx_http_request_t *r)
+{
+    ngx_str_t ct;
+
+    if (r->headers_out.status != NGX_HTTP_OK) {
+        return 0;
+    }
+
+    ct = r->headers_out.content_type;
+    if (ct.len < sizeof("application/grpc") - 1) {
+        return 0;
+    }
+
+    return ngx_strncasecmp(ct.data,
+                           (u_char *) "application/grpc",
+                           sizeof("application/grpc") - 1) == 0;
 }
 
 static ngx_int_t
@@ -453,6 +475,13 @@ ngx_http_grpc_web_header_filter(ngx_http_request_t *r)
     if (ctx == NULL || !ctx->active) {
         return ngx_http_grpc_web_next_header_filter(r);
     }
+
+    if (!ngx_http_grpc_web_is_native_grpc_response(r)) {
+        ctx->transform_response = 0;
+        return ngx_http_grpc_web_next_header_filter(r);
+    }
+
+    ctx->transform_response = 1;
 
     if (ctx->text_response) {
         ngx_str_set(&r->headers_out.content_type,
@@ -792,7 +821,9 @@ ngx_http_grpc_web_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
     ngx_chain_t *cl, *last, *out, *trailers;
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_grpc_web_module);
-    if (ctx == NULL || !ctx->active || ctx->trailers_sent) {
+    if (ctx == NULL || !ctx->active || !ctx->transform_response
+        || ctx->trailers_sent)
+    {
         return ngx_http_grpc_web_next_body_filter(r, in);
     }
 
