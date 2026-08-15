@@ -111,7 +111,9 @@ server.on("stream", (stream, headers) => {
       }
 
       if (mode === "clean-without-trailers") {
-        stream.end();
+        // Keep DATA and END_STREAM distinct so the proxy has a real chance to
+        // forward the completed DATA frame before observing malformed gRPC EOF.
+        setTimeout(() => stream.end(), 25);
         return;
       }
 
