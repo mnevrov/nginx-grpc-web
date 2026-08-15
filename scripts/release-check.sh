@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+RELEASE_VERSION=${RELEASE_VERSION:-v0.1.0}
+NGINX_VERSION=${NGINX_VERSION:-1.30.4}
+BUILD_CC=${BUILD_CC:-gcc}
+RELEASE_OUTPUT_DIR=${RELEASE_OUTPUT_DIR:-"$ROOT/dist/release/${RELEASE_VERSION}-rc"}
+RELEASE_GATES=${RELEASE_GATES:-}
+RELEASE_CONTROLLED_DIR=${RELEASE_CONTROLLED_DIR:-}
+RELEASE_SOAK_DIR=${RELEASE_SOAK_DIR:-}
+RELEASE_ALLOW_INCONCLUSIVE=${RELEASE_ALLOW_INCONCLUSIVE:-0}
+ARCH=$(uname -m)
+
+require_path() {
+  local value=$1 label=$2
+  if [[ -z "$value" ]]; then
+    echo "$label is required" >&2
+    exit 2
+  fi
+  if [[ ! -e "$value" ]]; then
+    echo "$label not found: $value" >&2
+    exit 2
+  fi
+}
+
+require_path "$RELEASE_GATES" RELEASE_GATES
+require_path "$RELEASE_CONTROLLED_DIR" RELEASE_CONTROLLED_DIR
+require_path "$RELEASE_SOAK_DIR" RELEASE_SOAK_DIR
+
+case "$RELEASE_ALLOW_INCONCLUSIVE" in
+  0|1) ;;
+  *) echo "RELEASE_ALLOW_INCONCLUSIVE must be 0 or 1" >&2; exit 2 ;;
+esac
+
+rm -rf "$RELEASE_OUTPUT_DIR"
+mkdir -p "$RELEASE_OUTPUT_DIR/artifacts" "$RELEASE_OUTPUT_DIR/controlled" "$RELEASE_OUTPUT_DIR/soak"
+
+cp "$RELEASE_GATES" "$RELEASE_OUTPUT_DIR/gates.json"
+cp -a "$RELEASE_CONTROLLED_DIR"/. "$RELEASE_OUTPUT_DIR/controlled/"
+cp -a "$RELEASE_SOAK_DIR"/. "$RELEASE_OUTPUT_DIR/soak/"
+
+OUT_ROOT="$RELEASE_OUTPUT_DIR/artifacts" \
+NGINX_VERSION="$NGINX_VERSION" \
+BUILD_CC="$BUILD_CC" \
+  bash "$ROOT/scripts/package-module.sh"
+
+PACKAGE_DIR="$RELEASE_OUTPUT_DIR/artifacts/nginx-${NGINX_VERSION}-${BUILD_CC}-linux-${ARCH}"
+args=(
+  --repo-root "$ROOT"
+  --release-version "$RELEASE_VERSION"
+  --gates "$RELEASE_OUTPUT_DIR/gates.json"
+  --package-dir "$PACKAGE_DIR"
+  --controlled-dir "$RELEASE_OUTPUT_DIR/controlled"
+  --soak-dir "$RELEASE_OUTPUT_DIR/soak"
+  --output "$RELEASE_OUTPUT_DIR/release-evidence.json"
+  --markdown "$RELEASE_OUTPUT_DIR/release-evidence.md"
+)
+if [[ "$RELEASE_ALLOW_INCONCLUSIVE" == "1" ]]; then
+  args+=(--allow-inconclusive)
+fi
+python3 "$ROOT/release/check.py" "${args[@]}"
+
+printf 'release bundle:   %s\n' "$RELEASE_OUTPUT_DIR"
+printf 'release evidence: %s\n' "$RELEASE_OUTPUT_DIR/release-evidence.md"
