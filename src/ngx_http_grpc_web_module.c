@@ -223,7 +223,7 @@ ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
     int rc;
     size_t cap, max_body, src_len, written;
     u_char *src;
-    ngx_buf_t *b, *ob;
+    ngx_buf_t *b, *ob, *special;
     ngx_chain_t *cl, *ol, **ll;
     ngx_http_grpc_web_loc_conf_t *glcf;
 
@@ -299,23 +299,51 @@ ngx_http_grpc_web_decode_text_request(ngx_http_request_t *r,
         }
 
         ctx->decoded_request_size += written;
-        ob->last += written;
-        ob->flush = b->flush;
-        ob->sync = b->sync;
-        ob->last_buf = b->last_buf;
-        ob->last_in_chain = b->last_in_chain;
 
         if (ngx_buf_in_memory(b)) {
             b->pos = b->last;
         }
 
-        if (written != 0 || ob->last_buf || ob->flush || ob->sync) {
+        if (written != 0) {
+            ob->last += written;
+            ob->flush = b->flush;
+            ob->sync = b->sync;
+            ob->last_buf = b->last_buf;
+            ob->last_in_chain = b->last_in_chain;
+
             ol = ngx_alloc_chain_link(r->pool);
             if (ol == NULL) {
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
             }
 
             ol->buf = ob;
+            ol->next = NULL;
+            *ll = ol;
+            ll = &ol->next;
+
+        } else if (b->last_buf || b->flush || b->sync) {
+            /*
+             * NGINX chain_writer rejects a zero-sized temporary data buffer.
+             * A chunked request commonly ends in a separate zero-length
+             * last_buf callback, so forward that lifecycle marker as a special
+             * control buffer with no data backing instead.
+             */
+            special = ngx_calloc_buf(r->pool);
+            if (special == NULL) {
+                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+
+            special->flush = b->flush;
+            special->sync = b->sync;
+            special->last_buf = b->last_buf;
+            special->last_in_chain = b->last_in_chain;
+
+            ol = ngx_alloc_chain_link(r->pool);
+            if (ol == NULL) {
+                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+
+            ol->buf = special;
             ol->next = NULL;
             *ll = ol;
             ll = &ol->next;
