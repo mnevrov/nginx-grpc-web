@@ -71,16 +71,17 @@ Envoy используется в тестовом стенде как **referen
 | CORS | вне scope |
 | client streaming | вне scope |
 | bidi streaming | вне scope |
+| grpc-web JSON | вне scope |
 
-Таблица выше описывает целевой scope `v0.1`; hardening и compatibility matrix продолжаются в M7/M8.
+Поддерживаемые media-type tokens распознаются строго: `application/grpc-web`, `application/grpc-web+proto`, `application/grpc-web-text`, `application/grpc-web-text+proto`. Параметры после `;` допустимы; `+json`, произвольные suffixes и prefix-lookalikes не активируют модуль.
 
 ## Быстрый старт
 
 Требования:
 
 - Docker + Docker Compose;
-- Python 3.11+ для локальных protocol tests;
-- Node.js 22+ для browser tests;
+- Python 3.11+ для protocol tests;
+- Node.js 22+ для browser/fault tests;
 - GCC/Clang для разработки C-модуля.
 
 ```bash
@@ -88,14 +89,13 @@ make reference-up
 make test-reference
 ```
 
-Для реализованных M2–M6 путей:
+Для реализованных M2–M7 путей:
 
 ```bash
 # backend + NGINX module
 make module-up
 
-# unary/streaming/failure integration,
-# включая backpressure, RSS, cancellation и local gateway errors
+# unary/streaming/failure/hardening integration
 make test-module
 
 # canonical Envoy ↔ NGINX comparison
@@ -104,6 +104,10 @@ make test-diff
 
 # real React/grpc-web client in Chromium
 make test-browser
+
+# pure C parser/state-machine hardening
+make sanitizers CC=clang
+make fuzz-smoke FUZZ_CC=clang
 ```
 
 ## Репозиторий устроен как test-first проект
@@ -111,7 +115,9 @@ make test-browser
 ```text
 src/                  NGINX module
 tests/backend/        deterministic native gRPC backend
-tests/protocol/       protocol/differential tests
+tests/fault_backend/  raw HTTP/2 transport-fault injector
+tests/protocol/       protocol/differential/hardening tests
+tests/fuzz/           libFuzzer targets
 tests/browser/        real React + grpc-web + Playwright harness
 docker/envoy/         reference gateway
 docker/nginx/         NGINX with dynamic module
@@ -133,7 +139,7 @@ Envoy считается reference implementation для наблюдаемог�
 
 Сравнивается **каноническая семантика**:
 
-- sequence decoded gRPC data frames;
+- sequence decoded gRPC DATA frames;
 - payload bytes;
 - metadata;
 - trailers;
@@ -142,7 +148,9 @@ Envoy считается reference implementation для наблюдаемог�
 - порядок событий;
 - отсутствие искусственной буферизации stream;
 - cancellation/error semantics;
-- React-visible status для gateway failures.
+- React-visible status для gateway failures, когда Envoy сам формирует terminal semantics.
+
+Для raw transport fault после уже доставленного DATA Envoy не всегда синтезирует terminal grpc-web status. В таком случае oracle — не выдуманный status parity, а сохранность уже завершённых DATA frames, bounded lifecycle и работоспособность следующего запроса.
 
 ## Текущее состояние
 
@@ -189,44 +197,72 @@ Envoy считается reference implementation для наблюдаемог�
 
 ### M6 — cancellation and failures ✅
 
-M6 сначала доказал, что application-level failure semantics уже корректно наследуются от stock `ngx_http_grpc_module` без изменения production path:
+M6 доказал корректность application-level failure semantics через stock `ngx_http_grpc_module`:
 
 - clean empty server stream;
 - non-zero gRPC status после одного или нескольких DATA frames;
 - `grpc-timeout` / `DEADLINE_EXCEEDED`;
 - downstream client disconnect / browser `cancel()` с закрытием upstream RPC.
 
-Отдельный browser oracle выявил реальный gap только для локальных proxy errors. До M6 NGINX возвращал обычные HTML `502/504`, и `grpc-web` интерпретировал их как `UNKNOWN (2)`, тогда как Envoy давал семантически полезный terminal gRPC status.
-
-M6 добавляет узкую нормализацию **только для уже распознанных grpc-web requests**:
+Для локальных proxy errors добавлена узкая нормализация **только для уже распознанных grpc-web requests**:
 
 | Local HTTP status | Terminal gRPC status | Message |
 |---|---:|---|
 | `502`, `503` | `14 UNAVAILABLE` | `upstream unavailable` |
 | `504`, `408` | `4 DEADLINE_EXCEEDED` | `upstream timeout` |
 
-Для этих случаев модуль:
+Стандартный NGINX HTML error body при этом отбрасывается и заменяется корректным terminal gRPC-Web trailer frame.
 
-1. заменяет downstream HTTP status на `200`;
-2. выставляет соответствующий gRPC-Web media type;
-3. отбрасывает стандартный NGINX HTML error body;
-4. формирует единственный terminal trailer frame `0x80 | length | grpc-status/grpc-message`;
-5. в text mode Base64-кодирует этот frame существующим bounded output path.
+### M7 — hardening ✅
 
-Raw protocol regressions требуют именно корректный gRPC-Web wire response, а Playwright проверяет итоговый code через настоящий `grpc-web` client. Application mid-stream failure дополнительно проверяется на сохранение уже полученных DATA перед terminal status.
+M7 добавляет отдельные defensive gates вокруг production path, не превращая модуль в собственный HTTP/2 transport.
 
-**Граница M6:** сценарий `context.abort()` после DATA покрывает корректный gRPC terminal status, но не имитирует сырой HTTP/2 `RST_STREAM` или TCP reset после начала response. Такой transport-level fault injection вынесен в M7 hardening.
+**Parser/state-machine hardening:**
 
-### Последняя M6 валидация
+- C unit tests запускаются под ASAN + UBSAN;
+- incremental Base64 encoder/decoder и native gRPC frame parser имеют libFuzzer targets;
+- CI выполняет по 20 000 bounded fuzz iterations на каждый target;
+- malformed/incomplete Base64 и arbitrary fragmentation остаются regression-gated.
 
-Functional head `d99dc8fe02991c1826b7ad68d4c22fe427c34987` прошёл полный CI:
+**Media type boundary:**
+
+Первый M7 test-first прогон обнаружил реальный bug: prefix matcher ошибочно активировал модуль для `+json`, `+protoevil` и других похожих Content-Type. Production fix заменил prefix matching на точное сравнение четырёх поддерживаемых media-type tokens с разрешёнными параметрами после `;`.
+
+**Raw transport fault injection:**
+
+Тестовый HTTP/2 backend без gRPC framework умеет детерминированно выдавать:
+
+- `RST_STREAM` до response headers;
+- `RST_STREAM` после завершённого DATA frame;
+- TCP reset после DATA;
+- oversized native frame declaration;
+- truncated native frame;
+- clean HTTP/2 EOF после DATA без обязательных native gRPC trailers.
+
+`RST_STREAM` до DATA сравнивается через настоящий React/`grpc-web` client с Envoy. Для reset после DATA обнаружено важное поведение reference implementation: Envoy сохраняет уже доставленный DATA, но может не выдавать browser terminal `error/status/end`. Поэтому NGINX здесь не обязан синтезировать более сильную семантику, чем oracle; вместо этого тесты требуют byte-exact сохранения завершённого DATA, bounded memory/lifecycle и здорового следующего request.
+
+**Resource/lifecycle hardening:**
+
+- 25 oversized-frame атак при `grpc_web_max_frame_size 1k` должны быть отвергнуты до memory amplification; RSS gate `<16 MiB`;
+- repeated truncated-frame faults не должны отравлять worker state;
+- raw RST/TCP-reset после DATA повторяются сериями с RSS gate `<16 MiB`;
+- 30 downstream disconnects активных streams проходят с RSS gate `<16 MiB`;
+- DATA без native trailers никогда не превращается в ложный `grpc-status: 0`;
+- malformed request с уникальным secret в payload и `Authorization` проверяет отсутствие этого secret в NGINX logs.
+
+### Последняя M7 функциональная валидация
+
+Полный CI M7 прошёл:
 
 - unit tests — ✅;
+- ASAN/UBSAN — ✅;
+- libFuzzer Base64 — `20 000` runs ✅;
+- libFuzzer frame parser — `20 000` runs ✅;
 - dynamic module build на NGINX 1.30.2 — ✅;
 - dynamic module build на NGINX 1.31.1 — ✅;
 - Envoy reference — `2 passed`;
-- NGINX module integration — `23 passed`;
+- NGINX module integration — `43 passed`;
 - Envoy ↔ NGINX differential — `8 passed`;
-- React/`grpc-web`/Chromium — `18 passed`.
+- React/`grpc-web`/Chromium — `19 passed`.
 
-Следующий milestone — **M7: hardening**: sanitizers, malformed/fuzz corpus, transport-level reset fault injection, overflow/size-limit review, leak/lifecycle checks и logging review.
+Следующий milestone — **M8: compatibility & rollout**: актуальная stable/mainline NGINX matrix, GCC/Clang build matrix, расширенная browser matrix, installation/packaging, deployment examples и безопасный Envoy → NGINX rollout guide.
