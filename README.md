@@ -109,6 +109,8 @@ Browser matrix использует настоящий React + официаль�
 - Docker + Docker Compose;
 - Python 3.11+;
 - Node.js 22+;
+- Go 1.23+ для perf loadgen;
+- OpenSSL для TLS/H2 perf profile;
 - GCC/Clang.
 
 Envoy oracle:
@@ -147,6 +149,33 @@ Hardening:
 make sanitizers CC=clang
 make fuzz-smoke FUZZ_CC=clang
 ```
+
+Performance A/B:
+
+```bash
+# controlled cleartext HTTP/1.1 baseline
+make perf-smoke
+make perf-typical
+make perf-large
+make perf-slow
+
+# production-like TLS + HTTP/2 frontend
+make perf-h2-smoke
+make perf-h2-typical
+make perf-h2-large
+make perf-h2-slow
+```
+
+Perf suite сравнивает:
+
+```text
+legacy: loadgen -> NGINX -> Envoy -> backend
+native: loadgen -> NGINX(module) -> backend
+```
+
+`perf-h2-*` строго требует валидный TLS chain, HTTP/2 и ALPN `h2`; silent fallback на HTTP/1.1 считается ошибкой. Large profile проверяет 1/4/8 MiB DATA, text/binary и concurrency 1/4/16. CPU/RSS снимаются host-side через cgroup v2. Подробности: [`perf/README.md`](perf/README.md).
+
+Важно: CI perf smoke проверяет **измерительный контур**, а не доказывает performance advantage. Для архитектурного решения нужны controlled-host A/B/B/A runs.
 
 Другой NGINX target локально:
 
@@ -241,9 +270,10 @@ tests/fault_backend/  raw HTTP/2 transport-fault injector
 tests/protocol/       protocol/differential/hardening tests
 tests/fuzz/           libFuzzer targets
 tests/browser/        real React + grpc-web + Playwright harness
+perf/                 A/B loadgen, HTTP1 + TLS/H2 topology and reports
 docker/envoy/         reference gateway
 docker/nginx/         NGINX module build/runtime image
-examples/              production configuration examples
+examples/             production configuration examples
 docs/                 protocol/architecture/testing/operations
 prompts/              prompts for coding agents
 AGENTS.md              обязательные правила для агентов
@@ -301,5 +331,25 @@ Application gRPC aborts, deadlines и cancellation проходят через s
 - production config/install/observability docs;
 - Envoy → NGINX canary/rollback runbook;
 - v0.1 release checklist.
+
+### M9 — streaming performance engine ✅
+
+- Go grpc-web server-stream load generator;
+- frame-aware text/binary decoding;
+- backend-relative DATA timing;
+- A/B/B/A legacy vs native topology;
+- typical/large/slow profiles;
+- cgroup v2 CPU, process RSS and cgroup-memory sampling;
+- JSON + Markdown reports;
+- CI topology smoke without treating shared-runner numbers as a performance result.
+
+### M10 — TLS/HTTP2 benchmark path
+
+- production-like TLS + HTTP/2 listener on both gateway paths;
+- ephemeral benchmark CA/certificate;
+- strict CA + HTTP/2 + ALPN `h2` validation;
+- protocol/TLS metadata in raw results;
+- separate `perf-h2-*` profiles and CI gate;
+- frontend dimension in reports so HTTP/1.1 and TLS/H2 samples cannot be mixed accidentally.
 
 Полная история и exit criteria: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
