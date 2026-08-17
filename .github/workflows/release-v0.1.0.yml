@@ -1,0 +1,164 @@
+name: publish-v0.1.0
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release-v0.1.0.yml
+      - .release/v0.1.0-publish
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-v0.1.0
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate publication marker and release inputs
+        run: |
+          set -euo pipefail
+          test "$(cat .release/v0.1.0-publish)" = "v0.1.0"
+          test -f docs/RELEASE_NOTES_v0.1.0.md
+          test -f scripts/package-module.sh
+          grep -q '^package-module:' Makefile
+
+  publish:
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: v0.1.0
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ github.token }}
+      NGINX_VERSION: 1.30.4
+      BUILD_CC: gcc
+    steps:
+      - name: Checkout exact successful main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact current main and publication intent
+        run: |
+          set -euo pipefail
+          test "$(cat .release/v0.1.0-publish)" = "$VERSION"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_main" != "$RELEASE_SHA" ]]; then
+            echo "Refusing stale release: successful CI SHA=$RELEASE_SHA current main=$current_main" >&2
+            exit 1
+          fi
+
+      - name: Build and verify exact release artifact
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+          make package-module NGINX_VERSION="$NGINX_VERSION" BUILD_CC="$BUILD_CC"
+          package_dir="dist/nginx-${NGINX_VERSION}-${BUILD_CC}-linux-x86_64"
+          module="${package_dir}/ngx_http_grpc_web_module.so"
+          manifest="${package_dir}/MANIFEST.txt"
+          sums="${package_dir}/SHA256SUMS"
+          test -s "$module"
+          test -s "$manifest"
+          test -s "$sums"
+          grep -Fx "source_commit=$RELEASE_SHA" "$manifest"
+          sha256sum -c "$sums"
+
+          mkdir -p release-assets
+          asset_name="ngx_http_grpc_web_module-${VERSION}-nginx-${NGINX_VERSION}-linux-amd64-${BUILD_CC}.so"
+          cp "$module" "release-assets/$asset_name"
+          cp "$manifest" release-assets/MANIFEST.txt
+          (
+            cd release-assets
+            sha256sum "$asset_name" > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+
+      - name: Create or verify annotated tag
+        run: |
+          set -euo pipefail
+          resolve_tag_target() {
+            local ref_json object_type object_sha
+            ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}")"
+            object_type="$(jq -r '.object.type' <<<"$ref_json")"
+            object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+            if [[ "$object_type" == "tag" ]]; then
+              gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" --jq '.object.sha'
+            elif [[ "$object_type" == "commit" ]]; then
+              printf '%s\n' "$object_sha"
+            else
+              echo "Unsupported tag object type: $object_type" >&2
+              return 1
+            fi
+          }
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+            target="$(resolve_tag_target)"
+            test "$target" = "$RELEASE_SHA" || {
+              echo "Existing ${VERSION} points to $target, expected $RELEASE_SHA" >&2
+              exit 1
+            }
+          else
+            tag_object_sha="$(
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/tags" \
+                -f tag="$VERSION" \
+                -f message="nginx-grpc-web ${VERSION}" \
+                -f object="$RELEASE_SHA" \
+                -f type="commit" \
+                --jq '.sha'
+            )"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${VERSION}" \
+              -f sha="$tag_object_sha" >/dev/null
+            target="$(resolve_tag_target)"
+            test "$target" = "$RELEASE_SHA"
+          fi
+
+      - name: Create or complete GitHub Release
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" release-assets/* --clobber
+          else
+            gh release create "$VERSION" release-assets/* \
+              --verify-tag \
+              --title "nginx-grpc-web ${VERSION}" \
+              --notes-file docs/RELEASE_NOTES_v0.1.0.md
+          fi
+
+      - name: Verify published release identity
+        run: |
+          set -euo pipefail
+          release_tag="$(gh release view "$VERSION" --json tagName --jq '.tagName')"
+          test "$release_tag" = "$VERSION"
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}")"
+          object_type="$(jq -r '.object.type' <<<"$ref_json")"
+          object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+          if [[ "$object_type" == "tag" ]]; then
+            target="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" --jq '.object.sha')"
+          else
+            target="$object_sha"
+          fi
+          test "$target" = "$RELEASE_SHA"
+          gh release view "$VERSION" --json url,tagName,name,publishedAt
+          {
+            echo "## ${VERSION} published"
+            echo "- source: \`${RELEASE_SHA}\`"
+            echo "- NGINX: \`${NGINX_VERSION}\`"
+            echo "- compiler: \`${BUILD_CC}\`"
+            echo "- controlled benchmark/soak/staging: deferred to Issue #20"
+          } >> "$GITHUB_STEP_SUMMARY"
