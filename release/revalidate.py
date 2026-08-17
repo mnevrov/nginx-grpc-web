@@ -32,6 +32,16 @@ def _manifest_int(manifest: dict[str, Any], name: str, *, minimum: int) -> int:
     return value
 
 
+def _validate_controlled_host(host: dict[str, Any], label: str) -> None:
+    if host.get("strict") is not True:
+        raise EvidenceInputError(f"{label} strict must be boolean true")
+    if host.get("valid") is not True:
+        raise EvidenceInputError(f"{label} valid must be boolean true")
+    fingerprint = host.get("fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint.strip():
+        raise EvidenceInputError(f"{label} fingerprint must be a non-empty string")
+
+
 def revalidate_controlled(repo_root: Path, controlled_dir: Path) -> dict[str, Any]:
     manifest = load_json(controlled_dir / "manifest.json", "controlled manifest")
     slo_path = controlled_dir / "slo.json"
@@ -40,6 +50,8 @@ def revalidate_controlled(repo_root: Path, controlled_dir: Path) -> dict[str, An
         raise EvidenceInputError(f"missing controlled SLO: {slo_path}")
     if not policy_path.is_file():
         raise EvidenceInputError(f"missing controlled decision policy: {policy_path}")
+    if manifest.get("strict_preflight") is not True:
+        raise EvidenceInputError("production controlled revalidation requires strict_preflight=true boolean")
 
     frontend = manifest.get("frontend")
     transport = manifest.get("transport")
@@ -62,6 +74,8 @@ def revalidate_controlled(repo_root: Path, controlled_dir: Path) -> dict[str, An
 
     capacity_script = repo_root / "perf" / "capacity.py"
     for repeat in repeats:
+        host = load_json(repeat / "host.json", f"controlled host {repeat.name}")
+        _validate_controlled_host(host, f"controlled host {repeat.name}")
         report = repeat / "report.json"
         original = repeat / "capacity.json"
         revalidated = repeat / "capacity.revalidated.json"
