@@ -1,6 +1,6 @@
 # nginx-grpc-web v0.1.0
 
-Дата подготовки: 2026-08-15.
+Дата подготовки: 2026-08-18.
 
 ## Что это за релиз
 
@@ -82,24 +82,23 @@ M8 merge commit в `main`:
 82729f5f3e026df820b01cfb5a9d2d36a7f31d85
 ```
 
-Post-merge `main` CI:
+M15 tooling code baseline (merge PR #21):
 
 ```text
-run #76
-id: 31888310660
-result: success
-commit: 82729f5f3e026df820b01cfb5a9d2d36a7f31d85
-```
-
-Это подтверждённая code baseline для `v0.1.0`. Release-prep PR добавляет только changelog/release metadata. После его merge тег `v0.1.0` должен указывать на resulting `main` commit **только после** зелёного post-merge CI этого commit.
-
-M14/M15 (PR #17, PR #21) merge commit и post-merge CI:
-
-```text
-release_commit: c22867c0d643dea069dd1bc605540dfe5f1c17be
+c22867c0d643dea069dd1bc605540dfe5f1c17be
 post-merge ci run: 32039399834
 result: success
 ```
+
+Release-prep metadata после M15 также прошло post-merge CI:
+
+```text
+PR #22 merge: 4b20419b317fae9ce1432f03a0e62359654abaaa
+ci run: 32040470473
+result: success
+```
+
+Финальный source commit релиза определяется **самим Git tag `v0.1.0`**. Тег разрешается создавать только на актуальном `main`, содержащем весь M15 tooling и финальную release metadata/provenance, после зелёного CI этого exact commit. Ранние milestone SHA не должны трактоваться как tag target.
 
 ## Validation status
 
@@ -122,7 +121,7 @@ Deferred post-release validation:
 - production-like React acceptance;
 - Envoy rollback exercise.
 
-The deferred tests do not change the v0.1 protocol scope. Their results will be tracked separately in [Issue #20](https://github.com/mnevrov/nginx-grpc-web/issues/20) and in `docs/POST_RELEASE_VALIDATION_v0.1.0.md`.
+The deferred tests do not change the v0.1 protocol scope. Their results are tracked separately in [Issue #20](https://github.com/mnevrov/nginx-grpc-web/issues/20) and in `docs/POST_RELEASE_VALIDATION_v0.1.0.md`.
 
 Any prior CI/shared-runner numeric observations remain `harness_only` / non-production measurements and are not promoted to `controlled` evidence. This release does not claim production-proven capacity, a specific performance delta versus Envoy, or a specific stream-concurrency figure — those claims require the deferred controlled-host evidence above.
 

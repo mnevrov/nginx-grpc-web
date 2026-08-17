@@ -1,13 +1,18 @@
 # v0.1.0 post-release validation
 
-Release commit:
-c22867c0d643dea069dd1bc605540dfe5f1c17be
+Release line:
+`v0.1.0`
 
-Tag:
-v0.1.0
+Source identity:
+The authoritative release source is the commit referenced by the published `v0.1.0` Git tag. Do not infer the final tag target from an earlier milestone SHA recorded in this document.
+
+M15 code baseline:
+`c22867c0d643dea069dd1bc605540dfe5f1c17be` (merge of PR #21).
+
+Release metadata was merged after the M15 code baseline (PR #22 and subsequent provenance-only release-prep changes), so the final tag target is intentionally resolved only at publication time from the then-current, green `main`.
 
 Status:
-RELEASED — CONTROLLED PERFORMANCE VALIDATION PENDING
+CONTROLLED PERFORMANCE VALIDATION PENDING
 
 ## Already validated
 
@@ -16,7 +21,7 @@ RELEASED — CONTROLLED PERFORMANCE VALIDATION PENDING
 - compatibility;
 - browser tests;
 - sanitizer/hardening;
-- package;
+- package mechanics;
 - M14 mechanics;
 - M15 tooling mechanics.
 
@@ -42,9 +47,10 @@ and cannot be promoted to `controlled` evidence. `harness_only` results must not
 
 ## Tracking
 
-GitHub Issue #20 (kept OPEN): https://github.com/mnevrov/nginx-grpc-web/issues/20
+GitHub Issue #20 remains OPEN and tracks post-release controlled validation:
+https://github.com/mnevrov/nginx-grpc-web/issues/20
 
-Remaining work items tracked there:
+Remaining work items:
 
 1. controlled typical 4 KiB capacity;
 2. controlled 4 MiB;
