@@ -11,6 +11,7 @@ on:
       - "perf/run-rc-soak.sh"
       - "tests/browser/playwright.staging.config.ts"
       - "tests/browser/staging/**"
+      - "scripts/run-staging-browser.sh"
       - ".github/workflows/rc-benchmark.yml"
       - "Makefile"
       - "docs/**"
@@ -43,6 +44,7 @@ jobs:
         run: |
           bash -n perf/run-rc.sh
           bash -n perf/run-rc-soak.sh
+          bash -n scripts/run-staging-browser.sh
       - name: Staircase CLI smoke
         run: |
           set -euo pipefail
