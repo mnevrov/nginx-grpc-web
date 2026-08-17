@@ -74,7 +74,7 @@ jobs:
         with:
           node-version: "22"
       - working-directory: tests/browser
-        run: npm install
+        run: npm ci --no-audit --no-fund
       - name: Parse/list external staging acceptance tests without contacting staging
         working-directory: tests/browser
         env:
