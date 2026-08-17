@@ -21,17 +21,31 @@ def write_json(path: Path, value: dict) -> None:
 
 def scenario_summary() -> dict:
     return {
+        "version": 1,
         "source_commit": COMMIT,
         "host_fingerprint": HOST,
         "nginx_version": "1.30.4",
         "compiler": "gcc",
+        "frontend": "tls-h2",
+        "transport": "h2",
+        "payload_bytes": 4096,
+        "messages": 1,
+        "backend_delay_ms": 0,
+        "consumer_delay_ms": 0,
+        "capacity_steps": "25,50,100,200",
+        "repeat_count": 5,
         "evidence_class": "controlled",
         "boundaries_complete": True,
+        "boundary_missing": {"legacy": [], "native": []},
         "ready": True,
+        "reasons": [],
         "recommendation": "native_preferred",
+        "decision_reasons": [],
         "capacity": {},
         "capacity_delta_percent": 10.0,
+        "reference_streams": 100,
         "same_load_delta_percent": {},
+        "per_repeat": [],
     }
 
 

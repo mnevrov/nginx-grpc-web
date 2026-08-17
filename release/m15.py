@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 from pathlib import Path
 from typing import Any
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class M15EvidenceError(ValueError):
@@ -69,12 +73,6 @@ def evaluate(
     if not isinstance(scenarios, dict):
         _append_once(blockers, "benchmark_scenarios_missing")
         scenarios = {}
-    for name in ("typical", "large4m", "slow"):
-        scenario = scenarios.get(name)
-        if not isinstance(scenario, dict):
-            _append_once(blockers, f"benchmark_scenario_{name}_missing")
-        elif scenario.get("ready") is not True or scenario.get("evidence_class") != "controlled":
-            _append_once(blockers, f"benchmark_scenario_{name}_not_ready")
 
     large8m = benchmark_manifest.get("large8m")
     large8m_requested = False
@@ -85,14 +83,21 @@ def evaluate(
         large8m_requested = large8m.get("requested") is True
         skip_reason = large8m.get("skip_reason")
         large8m_skip_reason = skip_reason.strip() if isinstance(skip_reason, str) else ""
-        if large8m_requested:
-            scenario = scenarios.get("large8m")
-            if not isinstance(scenario, dict):
-                _append_once(blockers, "benchmark_scenario_large8m_missing")
-            elif scenario.get("ready") is not True or scenario.get("evidence_class") != "controlled":
-                _append_once(blockers, "benchmark_scenario_large8m_not_ready")
-        elif not large8m_skip_reason:
+        if not large8m_requested and not large8m_skip_reason:
             _append_once(blockers, "large8m_no_run_or_reason")
+
+    expected_scenario_names = {"typical", "large4m", "slow"}
+    if large8m_requested:
+        expected_scenario_names.add("large8m")
+    if set(scenarios) != expected_scenario_names:
+        _append_once(blockers, "benchmark_scenario_set_mismatch")
+
+    for name in expected_scenario_names:
+        scenario = scenarios.get(name)
+        if not isinstance(scenario, dict):
+            _append_once(blockers, f"benchmark_scenario_{name}_missing")
+        elif scenario.get("ready") is not True or scenario.get("evidence_class") != "controlled":
+            _append_once(blockers, f"benchmark_scenario_{name}_not_ready")
 
     if soak.get("ready") is not True:
         _append_once(blockers, "soak_not_ready")
@@ -101,7 +106,11 @@ def evaluate(
     if soak.get("host_fingerprint") != host:
         _append_once(blockers, "soak_host")
     duration = soak.get("duration_seconds")
-    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+    if (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not math.isfinite(duration)
+    ):
         _append_once(blockers, "soak_duration")
         duration_value = 0.0
     else:
@@ -147,7 +156,13 @@ def evaluate(
     else:
         release_sha = release_artifact.get("sha256")
         staging_sha = staging_package.get("sha256")
-        if not isinstance(release_sha, str) or not release_sha or release_sha != staging_sha:
+        if (
+            not isinstance(release_sha, str)
+            or not isinstance(staging_sha, str)
+            or not _SHA256_RE.match(release_sha)
+            or not _SHA256_RE.match(staging_sha)
+            or release_sha != staging_sha
+        ):
             _append_once(blockers, "staging_release_artifact_mismatch")
 
     return {

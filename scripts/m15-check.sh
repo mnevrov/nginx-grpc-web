@@ -11,7 +11,8 @@ STAGING_FILE=${STAGING_EVIDENCE_FILE:-}
 WAIVER_FILE=${RC_8H_WAIVER:-}
 
 require_dir_var() {
-  local name=$1 value=${!name:-}
+  local name=$1
+  local value=${!name:-}
   if [[ -z "$value" || ! -d "$value" ]]; then
     echo "$name must reference an existing directory" >&2
     exit 2
@@ -19,7 +20,8 @@ require_dir_var() {
 }
 
 require_file_var() {
-  local name=$1 value=${!name:-}
+  local name=$1
+  local value=${!name:-}
   if [[ -z "$value" || ! -f "$value" ]]; then
     echo "$name must reference an existing file" >&2
     exit 2
