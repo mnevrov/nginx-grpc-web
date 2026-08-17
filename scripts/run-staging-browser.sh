@@ -74,10 +74,14 @@ Path(sys.argv[1]).write_text(json.dumps({
 PY
 
 rm -rf "$ROOT/tests/browser/test-results"
-set +e
 (
   cd "$ROOT/tests/browser"
   npm ci --no-audit --no-fund
+)
+
+set +e
+(
+  cd "$ROOT/tests/browser"
   npx playwright test -c playwright.staging.config.ts --project="$BROWSER"
 )
 test_rc=$?

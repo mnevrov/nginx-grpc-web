@@ -44,7 +44,7 @@ if [[ -e "$OUTPUT_DIR" ]]; then
   exit 2
 fi
 
-mapfile -t META < <(python3 - "$BENCH_DIR/manifest.json" "$BENCH_DIR/rc-benchmark.json" "$BENCH_DIR/selected-attempts.json" "$SOAK_DIR/rc-soak-link.json" <<'PY'
+mapfile -t META < <(python3 - "$BENCH_DIR/manifest.json" "$BENCH_DIR/rc-benchmark.json" "$BENCH_DIR/selected-attempts.json" "$SOAK_DIR/rc-soak-link.json" "$BENCH_DIR" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -69,9 +69,16 @@ if benchmark.get("source_commit") != commit or soak.get("source_commit") != comm
     raise SystemExit("M15 source commit mismatch across benchmark/soak")
 if benchmark.get("host_fingerprint") != host or soak.get("host_fingerprint") != host:
     raise SystemExit("M15 host fingerprint mismatch across benchmark/soak")
+bench_dir = Path(sys.argv[5]).resolve()
 typical_path = Path(typical)
 if not typical_path.is_absolute():
+    typical_path = (bench_dir / typical_path).resolve()
+else:
     typical_path = typical_path.resolve()
+try:
+    typical_path.relative_to(bench_dir)
+except ValueError:
+    raise SystemExit(f"selected typical attempt is outside benchmark directory: {typical_path}")
 if not typical_path.is_dir():
     raise SystemExit(f"selected typical attempt does not exist: {typical_path}")
 print(commit)

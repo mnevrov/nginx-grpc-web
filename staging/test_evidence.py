@@ -159,6 +159,33 @@ class StagingEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(StagingEvidenceError, "must not be empty"):
                 evaluate_fixture(paths)
 
+    def test_native_and_rollback_dirs_must_be_distinct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = fixture(Path(tmp))
+            paths["rollback"] = paths["native"]
+            with self.assertRaisesRegex(StagingEvidenceError, "distinct directories"):
+                evaluate_fixture(paths)
+
+    def test_native_manifest_label_must_be_native_module(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = fixture(Path(tmp))
+            manifest_path = paths["native"] / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["label"] = "envoy-rollback"
+            write_json(manifest_path, manifest)
+            with self.assertRaisesRegex(StagingEvidenceError, "native-module"):
+                evaluate_fixture(paths)
+
+    def test_rollback_manifest_label_must_be_envoy_rollback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = fixture(Path(tmp))
+            manifest_path = paths["rollback"] / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["label"] = "native-module"
+            write_json(manifest_path, manifest)
+            with self.assertRaisesRegex(StagingEvidenceError, "envoy-rollback"):
+                evaluate_fixture(paths)
+
     def test_package_source_commit_must_match(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = fixture(Path(tmp))

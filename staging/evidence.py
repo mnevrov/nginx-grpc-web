@@ -118,8 +118,15 @@ def evaluate(
     if deployed_sha != actual_package_sha:
         raise StagingEvidenceError("deployed module checksum does not match exact-commit package")
 
+    if native_browser_dir.resolve() == rollback_browser_dir.resolve():
+        raise StagingEvidenceError("native and Envoy rollback browser evidence must come from distinct directories")
+
     native = load_json(native_browser_dir / "manifest.json", "native browser manifest")
     rollback = load_json(rollback_browser_dir / "manifest.json", "rollback browser manifest")
+    if native.get("label") != "native-module":
+        raise StagingEvidenceError("native browser manifest label must be 'native-module'")
+    if rollback.get("label") != "envoy-rollback":
+        raise StagingEvidenceError("rollback browser manifest label must be 'envoy-rollback'")
     native_endpoints = validate_browser(native, "native", source_commit)
     rollback_endpoints = validate_browser(rollback, "rollback", source_commit)
     if native_endpoints != rollback_endpoints:

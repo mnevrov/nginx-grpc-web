@@ -59,7 +59,7 @@ def selected_attempts(benchmark_dir: Path, manifest: dict[str, Any]) -> dict[str
             raise RCRevalidationError(f"missing selected attempt for {name}")
         path = Path(raw)
         if not path.is_absolute():
-            path = (ROOT / path).resolve()
+            path = (base / path).resolve()
         else:
             path = path.resolve()
         try:

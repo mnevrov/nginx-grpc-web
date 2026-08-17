@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import unittest
 
 from m15 import evaluate
@@ -153,6 +154,43 @@ class M15EvidenceTests(unittest.TestCase):
         result = run(values)
         self.assertTrue(result["ready"])
         self.assertFalse(result["large8m_requested"])
+
+    def test_extra_scenario_key_is_rejected(self):
+        values = inputs()
+        values[1]["scenarios"]["large8m_extra"] = ready_scenario()
+        result = run(values)
+        self.assertFalse(result["ready"])
+        self.assertIn("benchmark_scenario_set_mismatch", result["blockers"])
+
+    def test_large8m_scenario_present_but_not_requested_is_rejected(self):
+        values = inputs()
+        values[0]["large8m"] = {"requested": False, "skip_reason": "hardware limit"}
+        result = run(values)
+        self.assertFalse(result["ready"])
+        self.assertIn("benchmark_scenario_set_mismatch", result["blockers"])
+
+    def test_non_finite_soak_duration_is_rejected(self):
+        for duration in (math.nan, math.inf, -math.inf):
+            with self.subTest(duration=duration):
+                result = run(inputs(duration))
+                self.assertFalse(result["ready"])
+                self.assertIn("soak_duration", result["blockers"])
+
+    def test_matching_but_invalid_artifact_shas_are_rejected(self):
+        values = inputs()
+        values[4]["artifact"]["sha256"] = "not-a-sha256"
+        values[3]["package"]["sha256"] = "not-a-sha256"
+        result = run(values)
+        self.assertFalse(result["ready"])
+        self.assertIn("staging_release_artifact_mismatch", result["blockers"])
+
+    def test_uppercase_artifact_sha_is_rejected(self):
+        values = inputs()
+        values[4]["artifact"]["sha256"] = SHA.upper()
+        values[3]["package"]["sha256"] = SHA.upper()
+        result = run(values)
+        self.assertFalse(result["ready"])
+        self.assertIn("staging_release_artifact_mismatch", result["blockers"])
 
     def test_failed_staging_blocks_release(self):
         values = inputs()
