@@ -10,6 +10,7 @@ from typing import Any
 
 
 REQUIRED_GATES = ("compatibility", "protocol", "differential", "browser", "hardening")
+VALID_EVIDENCE_CLASSES = {"controlled", "harness_only"}
 
 
 @dataclass(frozen=True)
@@ -115,16 +116,20 @@ def evaluate_release(bundle: dict[str, Any], policy: ReleasePolicy) -> dict[str,
         gate = gates.get(name)
         if not isinstance(gate, dict):
             _append_once(blockers, f"gate_{name}_missing")
-            gate_summary[name] = {"passed": False, "commit": ""}
+            gate_summary[name] = {"passed": False, "commit": "", "evidence_class": ""}
             continue
         raw_passed = gate.get("passed")
         passed = raw_passed is True
         commit = _non_empty(gate.get("commit"))
-        gate_summary[name] = {"passed": passed, "commit": commit}
+        raw_gate_class = gate.get("evidence_class")
+        gate_class = raw_gate_class if isinstance(raw_gate_class, str) else ""
+        gate_summary[name] = {"passed": passed, "commit": commit, "evidence_class": gate_class}
         if raw_passed not in (True, False) or not isinstance(raw_passed, bool):
             _append_once(blockers, f"gate_{name}_invalid")
         elif not passed:
             _append_once(blockers, f"gate_{name}_failed")
+        if gate_class not in VALID_EVIDENCE_CLASSES:
+            _append_once(blockers, f"gate_{name}_evidence_class")
         if source_commit and commit != source_commit:
             _append_once(blockers, f"gate_{name}_commit")
 
@@ -184,11 +189,16 @@ def evaluate_release(bundle: dict[str, Any], policy: ReleasePolicy) -> dict[str,
 
     decision_class = _non_empty(decision.get("evidence_class"))
     soak_class = _non_empty(soak_report.get("evidence_class"))
-    if decision_class not in {"controlled", "harness_only"}:
+    if decision_class not in VALID_EVIDENCE_CLASSES:
         _append_once(blockers, "controlled_evidence_class")
-    if soak_class not in {"controlled", "harness_only"}:
+    if soak_class not in VALID_EVIDENCE_CLASSES:
         _append_once(blockers, "soak_evidence_class")
     evidence_class = "controlled" if decision_class == "controlled" and soak_class == "controlled" else "harness_only"
+
+    if evidence_class == "controlled":
+        for name in REQUIRED_GATES:
+            if gate_summary[name]["evidence_class"] != "controlled":
+                _append_once(blockers, f"gate_{name}_evidence_class")
 
     controlled_host = _non_empty(decision.get("host_fingerprint"))
     soak_events = soak_report.get("events")
@@ -280,12 +290,14 @@ def render_markdown(result: dict[str, Any]) -> str:
         "",
         "## Gates",
         "",
-        "| gate | passed | commit |",
-        "|---|---|---|",
+        "| gate | passed | class | commit |",
+        "|---|---|---|---|",
     ]
     for name in REQUIRED_GATES:
         gate = result["gates"][name]
-        lines.append(f"| `{name}` | `{str(gate['passed']).lower()}` | `{gate['commit']}` |")
+        lines.append(
+            f"| `{name}` | `{str(gate['passed']).lower()}` | `{gate['evidence_class']}` | `{gate['commit']}` |"
+        )
 
     lines.extend([
         "",

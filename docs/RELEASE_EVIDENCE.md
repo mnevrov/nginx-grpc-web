@@ -11,12 +11,13 @@ M14 вводит единый machine-checkable release evidence bundle для `
 `make release-check` независимо проверяет:
 
 - текущий source commit и clean git tree;
-- exact commit обязательных `compatibility/protocol/differential/browser/hardening` gates;
+- exact commit и evidence class обязательных `compatibility/protocol/differential/browser/hardening` gates;
 - `source_commit`, NGINX version, compiler и `--with-compat` из package manifest;
 - SHA256 `.so`, пересчитанный по реальному файлу, против `SHA256SUMS`;
 - commit/NGINX/compiler controlled benchmark manifest;
 - commit/NGINX/compiler soak manifest;
 - evidence class M12/M13;
+- строгий raw M12 host preflight (`strict=true`, `valid=true` как JSON booleans);
 - совпадение controlled-host fingerprint между performance decision и soak;
 - strict soak semantics;
 - минимум 2 часа strict soak;
@@ -31,7 +32,7 @@ M14 использует три основных состояния.
 
 ### `blocked`
 
-Есть hard release blocker: checksum mismatch, stale commit, failed/missing test gate, dirty source tree, wrong build target, mixed host fingerprints, failed/short strict soak, несовпадение aggregate JSON с raw evidence, неверный JSON type и т.п.
+Есть hard release blocker: checksum mismatch, stale commit, failed/missing test gate, несовместимый gate evidence class, dirty source tree, wrong build target, mixed host fingerprints, failed/short strict soak, несовпадение aggregate JSON с raw evidence, неверный JSON type и т.п.
 
 Команда завершается ненулевым кодом.
 
@@ -51,7 +52,7 @@ RELEASE_ALLOW_INCONCLUSIVE=1 make release-check
 
 ### `release_candidate`
 
-Все machine-checkable M14 gates согласованы, controlled evidence прошло policy, а aggregate performance/soak reports успешно пересчитаны из raw evidence.
+Все machine-checkable M14 gates согласованы, каждый обязательный release gate имеет class `controlled`, controlled performance/soak evidence прошло policy, а aggregate performance/soak reports успешно пересчитаны из raw evidence.
 
 Это означает только готовность evidence bundle к следующей стадии. `release_candidate` **не разрешает автоматически ставить tag или выкатывать production**. До `v0.1.0` остаются staging acceptance и ручное release/canary решение.
 
@@ -59,33 +60,38 @@ RELEASE_ALLOW_INCONCLUSIVE=1 make release-check
 
 ### Gate evidence
 
-`RELEASE_GATES` указывает на JSON с exact source commit для каждого обязательного gate:
+`RELEASE_GATES` указывает на JSON с exact source commit и явным evidence class для каждого обязательного gate:
 
 ```json
 {
   "compatibility": {
     "passed": true,
     "commit": "<exact-rc-sha>",
+    "evidence_class": "controlled",
     "run_id": "..."
   },
   "protocol": {
     "passed": true,
     "commit": "<exact-rc-sha>",
+    "evidence_class": "controlled",
     "run_id": "..."
   },
   "differential": {
     "passed": true,
     "commit": "<exact-rc-sha>",
+    "evidence_class": "controlled",
     "run_id": "..."
   },
   "browser": {
     "passed": true,
     "commit": "<exact-rc-sha>",
+    "evidence_class": "controlled",
     "run_id": "..."
   },
   "hardening": {
     "passed": true,
     "commit": "<exact-rc-sha>",
+    "evidence_class": "controlled",
     "run_id": "..."
   }
 }
@@ -93,9 +99,9 @@ RELEASE_ALLOW_INCONCLUSIVE=1 make release-check
 
 `compatibility` означает завершённый release matrix из `docs/COMPATIBILITY.md`: stable/mainline NGINX и GCC/Clang build/load checks на exact release commit. `browser` агрегирует обязательную Chromium/Firefox/WebKit проверку.
 
-Поле `passed` обязано быть настоящим JSON boolean. Строки `"true"`/`"false"`, числа и отсутствующее поле не приводятся к boolean и блокируют release. То же правило применяется к strict/host-preflight flags controlled evidence.
+Поле `passed` обязано быть настоящим JSON boolean. Строки `"true"`/`"false"`, числа и отсутствующее поле не приводятся к boolean и блокируют release. `evidence_class` обязан быть `controlled` либо `harness_only`; неизвестный или отсутствующий class блокирует bundle. Controlled `release_candidate` требует `controlled` для **каждого** обязательного gate. `harness_only` gate разрешён только в harness-only mechanics bundle и не может быть повышен до production evidence.
 
-`run_id`/URL могут сохраняться для аудита, но release verdict опирается на `passed` и exact commit linkage, а не на имя файла.
+`run_id`/URL могут сохраняться для аудита, но release verdict опирается на `passed`, evidence class и exact commit linkage, а не на имя файла.
 
 ### Controlled benchmark
 
@@ -118,11 +124,16 @@ repeat-02/...
 Для production evidence ожидается:
 
 - `manifest.json.git_commit == RC commit`;
+- `manifest.json.strict_preflight` является JSON boolean `true`;
 - выбранные NGINX/compiler совпадают с release target;
 - scenario fields имеют ожидаемые JSON-типы;
+- каждый raw `repeat-*/host.json` содержит **ровно** boolean `strict=true` и `valid=true`;
+- каждый raw host имеет непустой fingerprint;
 - `decision.json.evidence_class == controlled`;
 - единый непустой host fingerprint;
 - M12 decision не `inconclusive`.
+
+Строки `"true"`/`"false"`, числа, `null` и отсутствующие `strict`/`valid` в raw M12 host snapshots считаются malformed evidence и блокируют production revalidation. Это проверяется до повторного запуска decision aggregation.
 
 Raw repeat directories копируются в release bundle без потери provenance. Один `decision.json` без `report.json`, `capacity.json`, `host.json`, SLO и decision policy недостаточен для production release evidence.
 
@@ -159,12 +170,13 @@ Production path (`RELEASE_ALLOW_INCONCLUSIVE=0`, default) не доверяет 
 
 Перед формированием final verdict `release/revalidate.py` выполняет:
 
-1. для каждого `repeat-*` повторно запускает `perf/capacity.py` над сохранённым `report.json` с сохранёнными `slo.json` и scenario parameters из controlled manifest;
-2. требует семантического равенства `capacity.revalidated.json` исходному `capacity.json`;
-3. повторно запускает `perf/decision.py` над repeat-набором и сохранённым `decision-policy.json`;
-4. требует семантического равенства `decision.revalidated.json` исходному `decision.json`;
-5. повторно запускает `perf/soak.py --strict` над `nginx.stats.tsv`, `events.json` и `soak-policy.json`;
-6. требует семантического равенства `soak.revalidated.json` исходному `soak.json`.
+1. требует `strict_preflight=true` в controlled manifest и exact JSON booleans `strict=true`, `valid=true` в каждом raw `repeat-*/host.json`;
+2. для каждого `repeat-*` повторно запускает `perf/capacity.py` над сохранённым `report.json` с сохранёнными `slo.json` и scenario parameters из controlled manifest;
+3. требует семантического равенства `capacity.revalidated.json` исходному `capacity.json`;
+4. повторно запускает `perf/decision.py` над repeat-набором и сохранённым `decision-policy.json`;
+5. требует семантического равенства `decision.revalidated.json` исходному `decision.json`;
+6. повторно запускает `perf/soak.py --strict` над `nginx.stats.tsv`, `events.json` и `soak-policy.json`;
+7. требует семантического равенства `soak.revalidated.json` исходному `soak.json`.
 
 Результат сохраняется в:
 
@@ -201,7 +213,7 @@ make release-check
 2. повторно валидирует M11/M12/M13 aggregate reports из raw evidence;
 3. заново собирает package artifact из текущего commit;
 4. пересчитывает SHA256 `.so`;
-5. проверяет cross-document provenance и обязательные exact-SHA gates;
+5. проверяет cross-document provenance и обязательные exact-SHA/evidence-class gates;
 6. создаёт `release-evidence.json` и `release-evidence.md`.
 
 Нельзя подменить эти этапы простым копированием заранее опубликованного checksum или aggregate JSON.
@@ -265,7 +277,10 @@ M14 отвергает как минимум:
 - stale artifact source commit;
 - dirty/unknown source tree state;
 - missing/failed/stale compatibility/protocol/differential/browser/hardening gate;
+- missing/unknown gate evidence class;
+- `harness_only` gate при попытке сформировать controlled `release_candidate`;
 - non-boolean gate/strict/preflight values;
+- malformed raw M12 host strict/valid flags;
 - stale controlled/soak commit;
 - wrong NGINX/compiler identity;
 - controlled decision `inconclusive` при попытке получить controlled RC;
@@ -286,25 +301,27 @@ Workflow `.github/workflows/release-evidence.yml` намеренно испол�
 
 Он:
 
-1. запускает failure-mode unit tests;
-2. checkout'ит exact PR head, а не synthetic merge SHA;
-3. генерирует `compatibility/protocol/differential/browser/hardening` harness gates, привязанные к этому SHA;
-4. генерирует `harness_only` M12/M13 reports;
-5. явно фиксирует `revalidation.skipped = harness_only`;
-6. реально собирает dynamic module через `scripts/package-module.sh`;
-7. пересчитывает и проверяет checksum/manifest;
-8. формирует полный release bundle;
-9. требует итог:
+1. ограничивает `GITHUB_TOKEN` до `contents: read` и не сохраняет checkout credentials в рабочем дереве;
+2. запускает failure-mode unit tests;
+3. checkout'ит exact PR head, а не synthetic merge SHA;
+4. генерирует `compatibility/protocol/differential/browser/hardening` gates с `evidence_class=harness_only`, привязанные к этому SHA;
+5. генерирует `harness_only` M12/M13 reports;
+6. явно фиксирует `revalidation.skipped = harness_only`;
+7. реально собирает dynamic module через `scripts/package-module.sh`;
+8. пересчитывает и проверяет checksum/manifest;
+9. формирует полный release bundle;
+10. требует итог:
 
 ```text
 evidence_class = harness_only
 verdict = inconclusive
 mechanics_pass = true
 gates.compatibility.passed = true
+gates.compatibility.evidence_class = harness_only
 raw_revalidation.skipped = harness_only
 ```
 
-Synthetic compatibility gate в этом workflow проверяет **механику M14 aggregation**, а не заменяет реальный compatibility matrix. Production `gates.json` должен ссылаться на настоящий exact-release-commit CI result.
+Synthetic compatibility gate в этом workflow проверяет **механику M14 aggregation**, а не заменяет реальный compatibility matrix. Production `gates.json` должен ссылаться на настоящий exact-release-commit CI result с `evidence_class=controlled`.
 
 Любой `release_candidate` на shared CI для этого mechanics run является ошибкой release tooling.
 
