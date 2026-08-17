@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from collect import EvidenceInputError
-from revalidate import _assert_json_equal, revalidate_controlled, revalidate_soak
+from revalidate import _assert_json_equal, _validate_controlled_host, revalidate_controlled, revalidate_soak
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -26,6 +26,7 @@ def controlled_fixture(root: Path, **overrides) -> Path:
         "backend_delay_ms": 20,
         "consumer_delay_ms": 0,
         "gateway_cpuset": "2-5",
+        "strict_preflight": True,
     }
     manifest.update(overrides)
     write_json(controlled / "manifest.json", manifest)
@@ -74,6 +75,40 @@ class RevalidationTests(unittest.TestCase):
             controlled = controlled_fixture(root, payload_bytes=True)
             with self.assertRaisesRegex(EvidenceInputError, "payload_bytes must be an integer"):
                 revalidate_controlled(root, controlled)
+
+    def test_controlled_requires_boolean_true_manifest_preflight(self):
+        for value in (False, "true", "false", 1, 0, None):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                controlled = controlled_fixture(root, strict_preflight=value)
+                with self.assertRaisesRegex(EvidenceInputError, "strict_preflight=true boolean"):
+                    revalidate_controlled(root, controlled)
+
+    def test_controlled_host_flags_require_exact_boolean_true(self):
+        invalid_values = (False, "true", "false", 1, 0, None)
+        for field in ("strict", "valid"):
+            for value in invalid_values:
+                with self.subTest(field=field, value=value):
+                    host = {"strict": True, "valid": True, "fingerprint": "host-a"}
+                    if value is None:
+                        del host[field]
+                    else:
+                        host[field] = value
+                    with self.assertRaisesRegex(EvidenceInputError, rf"{field} must be boolean true"):
+                        _validate_controlled_host(host, "controlled host repeat-01")
+
+    def test_controlled_host_requires_non_empty_fingerprint(self):
+        for value in (None, "", "   ", 123):
+            with self.subTest(value=value):
+                host = {"strict": True, "valid": True, "fingerprint": value}
+                with self.assertRaisesRegex(EvidenceInputError, "fingerprint must be a non-empty string"):
+                    _validate_controlled_host(host, "controlled host repeat-01")
+
+    def test_controlled_host_accepts_exact_strict_valid_booleans(self):
+        _validate_controlled_host(
+            {"strict": True, "valid": True, "fingerprint": "host-a"},
+            "controlled host repeat-01",
+        )
 
     def test_soak_revalidation_requires_strict_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
