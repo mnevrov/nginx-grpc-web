@@ -1,4 +1,4 @@
-.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-capacity-test perf-soak-test release-evidence-test release-check perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-capacity-smoke perf-h2-capacity-smoke perf-capacity perf-h2-capacity perf-soak-smoke perf-soak perf-down lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-capacity-test perf-soak-test release-evidence-test release-check rc-benchmark-test rc-soak-test staging-evidence-test m15-evidence-test rc-benchmark rc-soak rc-release-check staging-browser staging-evidence m15-check perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-capacity-smoke perf-h2-capacity-smoke perf-capacity perf-h2-capacity perf-soak-smoke perf-soak perf-down lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
@@ -24,8 +24,18 @@ help:
 	  'make perf-loadgen-test - Go loadgen protocol/unit tests' \
 	  'make perf-capacity-test - pure Python SLO/capacity tests' \
 	  'make perf-soak-test  - pure Python soak trend/lifecycle tests' \
-	  'make release-evidence-test - pure Python M14 release evidence tests' \
+	  'make release-evidence-test - pure Python M14/M15 release evidence tests' \
 	  'make release-check   - build/validate self-contained v0.1.0 RC evidence bundle' \
+	  'make rc-benchmark-test - pure Python M15 controlled-RC evaluator tests' \
+	  'make rc-soak-test    - pure Python M15 benchmark/soak provenance tests' \
+	  'make staging-evidence-test - pure Python M15 staging/rollback evidence tests' \
+	  'make m15-evidence-test - pure Python final M15 release-readiness tests' \
+	  'make rc-benchmark    - strict controlled-host RC benchmark; requires explicit SLOs and isolated CPU sets' \
+	  'make rc-soak         - strict >=2h soak tied to a completed RC benchmark host/source' \
+	  'make rc-release-check - feed selected M15 benchmark/soak into M14 controlled release evidence' \
+	  'make staging-browser - run unchanged React/grpc-web client against external staging endpoints' \
+	  'make staging-evidence - validate deployed package, native staging and Envoy rollback evidence' \
+	  'make m15-check       - aggregate benchmark/soak/staging/M14 evidence; never creates tag/release' \
 	  'make perf-smoke      - HTTP/1.1 short A/B topology + report validation' \
 	  'make perf-typical    - HTTP/1.1 4 KiB server-stream concurrency A/B' \
 	  'make perf-large      - HTTP/1.1 1/4/8 MiB text+binary A/B sweep' \
@@ -139,6 +149,36 @@ release-evidence-test:
 
 release-check:
 	bash ./scripts/release-check.sh
+
+rc-benchmark-test:
+	python3 perf/test_rc.py -q
+
+rc-soak-test:
+	python3 perf/test_rc_soak.py -q
+
+staging-evidence-test:
+	python3 staging/test_evidence.py -q
+
+m15-evidence-test:
+	python3 release/test_m15.py -q
+
+rc-benchmark:
+	bash ./perf/run-rc.sh
+
+rc-soak:
+	bash ./perf/run-rc-soak.sh
+
+rc-release-check:
+	bash ./scripts/rc-release-check.sh
+
+staging-browser:
+	bash ./scripts/run-staging-browser.sh
+
+staging-evidence:
+	bash ./scripts/staging-evidence.sh
+
+m15-check:
+	bash ./scripts/m15-check.sh
 
 perf-smoke:
 	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh smoke
