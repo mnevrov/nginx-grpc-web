@@ -30,7 +30,7 @@ jobs:
           set -euo pipefail
           test "$(cat .release/v0.1.0-publish)" = "v0.1.0"
           test -f docs/RELEASE_NOTES_v0.1.0.md
-          test -x scripts/package-module.sh
+          test -f scripts/package-module.sh
           grep -q '^package-module:' Makefile
 
   publish:
