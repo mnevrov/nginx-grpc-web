@@ -1,4 +1,4 @@
-.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-capacity-test perf-soak-test release-evidence-test release-check perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-capacity-smoke perf-h2-capacity-smoke perf-capacity perf-h2-capacity perf-soak-smoke perf-soak perf-down lint archive
+.PHONY: help unit sanitizers fuzz-smoke reference-up module-up down test-reference test-module test-diff test-browser package-module perf-loadgen-test perf-capacity-test perf-soak-test release-evidence-test release-check rc-benchmark-test rc-benchmark perf-smoke perf-typical perf-large perf-slow perf-h2-smoke perf-h2-typical perf-h2-large perf-h2-slow perf-capacity-smoke perf-h2-capacity-smoke perf-capacity perf-h2-capacity perf-soak-smoke perf-soak perf-down lint archive
 
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
@@ -26,6 +26,8 @@ help:
 	  'make perf-soak-test  - pure Python soak trend/lifecycle tests' \
 	  'make release-evidence-test - pure Python M14 release evidence tests' \
 	  'make release-check   - build/validate self-contained v0.1.0 RC evidence bundle' \
+	  'make rc-benchmark-test - pure Python M15 controlled-RC evaluator tests' \
+	  'make rc-benchmark    - strict controlled-host RC benchmark; requires explicit SLOs and isolated CPU sets' \
 	  'make perf-smoke      - HTTP/1.1 short A/B topology + report validation' \
 	  'make perf-typical    - HTTP/1.1 4 KiB server-stream concurrency A/B' \
 	  'make perf-large      - HTTP/1.1 1/4/8 MiB text+binary A/B sweep' \
@@ -139,6 +141,12 @@ release-evidence-test:
 
 release-check:
 	bash ./scripts/release-check.sh
+
+rc-benchmark-test:
+	python3 perf/test_rc.py -q
+
+rc-benchmark:
+	bash ./perf/run-rc.sh
 
 perf-smoke:
 	NGINX_VERSION=$(NGINX_VERSION) BUILD_CC=$(BUILD_CC) PERF_FRONTEND=http1 bash ./perf/run-ab.sh smoke
