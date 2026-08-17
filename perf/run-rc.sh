@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 OUTPUT_ROOT=${RC_OUTPUT_DIR:-"$ROOT/perf/results/rc-$(date -u +%Y%m%dT%H%M%SZ)"}
+OUTPUT_ROOT=$(python3 - "$OUTPUT_ROOT" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).resolve())
+PY
+)
 NGINX_VERSION=${NGINX_VERSION:-1.30.4}
 BUILD_CC=${BUILD_CC:-gcc}
 REPEATS=${RC_REPEATS:-5}
@@ -82,23 +88,30 @@ for pair in \
   require_positive_int "${pair%%:*}" "${pair#*:}" 1
 done
 
-# Validate staircase syntax before any expensive work.
-python3 "$ROOT/perf/rc.py" extend --steps "$TYPICAL_STEPS" --max-streams "$TYPICAL_MAX_STREAMS" >/dev/null || {
-  # A ceiling equal to the last configured step is legal only if the first attempt reaches both boundaries.
-  python3 - "$TYPICAL_STEPS" <<'PY'
+# Validate every staircase and its configured safety ceiling before expensive work.
+python3 - \
+  "$TYPICAL_STEPS" "$TYPICAL_MAX_STREAMS" \
+  "$LARGE4M_STEPS" "$LARGE4M_MAX_STREAMS" \
+  "$SLOW_STEPS" "$SLOW_MAX_STREAMS" \
+  "$LARGE8M_STEPS" "$LARGE8M_MAX_STREAMS" <<'PY'
 import sys
-steps = [int(x) for x in sys.argv[1].split(',')]
-assert steps and all(a < b for a, b in zip(steps, steps[1:])) and all(x > 0 for x in steps)
-PY
-}
-python3 - "$LARGE4M_STEPS" "$SLOW_STEPS" "$LARGE8M_STEPS" <<'PY'
-import sys
-for raw in sys.argv[1:]:
-    steps = [int(x) for x in raw.split(',')]
+args = sys.argv[1:]
+for raw, max_raw in zip(args[0::2], args[1::2]):
+    try:
+        steps = [int(x.strip()) for x in raw.split(",") if x.strip()]
+        ceiling = int(max_raw)
+    except ValueError as exc:
+        raise SystemExit(f"invalid RC staircase/ceiling: {raw!r}/{max_raw!r}: {exc}")
     if not steps or any(x <= 0 for x in steps) or any(a >= b for a, b in zip(steps, steps[1:])):
         raise SystemExit(f"invalid RC staircase: {raw}")
+    if steps[-1] > ceiling:
+        raise SystemExit(f"initial RC staircase exceeds configured ceiling: last={steps[-1]} ceiling={ceiling}")
 PY
 
+if [[ -e "$OUTPUT_ROOT" ]]; then
+  echo "RC benchmark output already exists; refusing to overwrite/merge evidence: $OUTPUT_ROOT" >&2
+  exit 2
+fi
 if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]]; then
   echo "RC benchmark requires a clean git worktree" >&2
   exit 2
