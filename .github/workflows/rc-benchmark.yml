@@ -1,0 +1,84 @@
+name: rc-benchmark
+
+on:
+  pull_request:
+    paths:
+      - "perf/rc.py"
+      - "perf/test_rc.py"
+      - "perf/run-rc.sh"
+      - "perf/rc_soak.py"
+      - "perf/test_rc_soak.py"
+      - "perf/run-rc-soak.sh"
+      - "tests/browser/playwright.staging.config.ts"
+      - "tests/browser/staging/**"
+      - "scripts/run-staging-browser.sh"
+      - "scripts/staging-evidence.sh"
+      - "scripts/rc-release-check.sh"
+      - "scripts/m15-check.sh"
+      - "staging/**"
+      - "release/m15.py"
+      - "release/test_m15.py"
+      - ".github/workflows/rc-benchmark.yml"
+      - "Makefile"
+      - "docs/**"
+      - "prompts/10_M15_CONTROLLED_RC.md"
+  workflow_dispatch:
+
+concurrency:
+  group: rc-benchmark-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: M15 RC benchmark evaluator failure-mode tests
+        run: make rc-benchmark-test
+      - name: M15 RC soak provenance failure-mode tests
+        run: make rc-soak-test
+      - name: M15 staging/rollback evidence failure-mode tests
+        run: make staging-evidence-test
+      - name: M15 final release-readiness failure-mode tests
+        run: make m15-evidence-test
+      - name: M15 operator shell syntax
+        run: |
+          bash -n perf/run-rc.sh
+          bash -n perf/run-rc-soak.sh
+          bash -n scripts/run-staging-browser.sh
+          bash -n scripts/staging-evidence.sh
+          bash -n scripts/rc-release-check.sh
+          bash -n scripts/m15-check.sh
+      - name: Staircase CLI smoke
+        run: |
+          set -euo pipefail
+          test "$(python3 perf/rc.py extend --steps 25,50,100 --max-streams 1000)" = "25,50,100,200"
+
+  staging-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - working-directory: tests/browser
+        run: npm ci --no-audit --no-fund
+      - name: Parse/list external staging acceptance tests without contacting staging
+        working-directory: tests/browser
+        env:
+          STAGING_ENDPOINT: http://staging.invalid
+          STAGING_UNAVAILABLE_ENDPOINT: http://staging-unavailable.invalid
+          STAGING_TIMEOUT_ENDPOINT: http://staging-timeout.invalid
+        run: npx playwright test --list -c playwright.staging.config.ts --project=chromium
