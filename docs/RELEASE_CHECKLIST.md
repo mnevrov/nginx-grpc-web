@@ -4,17 +4,29 @@
 
 Наличие tooling не закрывает evidence gate автоматически. Checkbox отмечается только когда соответствующее evidence реально существует для exact release commit.
 
+## POST-RELEASE VALIDATION (policy exception for v0.1.0)
+
+Решение по этому релизу: `v0.1.0` тегируется и публикуется **без** дождавшись controlled-host capacity benchmark, 2h/8h strict soak, real staging acceptance и practical Envoy rollback exercise. Эти проверки сознательно отложены, а не пропущены навсегда.
+
+- functional/protocol/CI validation выполнена и является release-blocking (разделы 1–4, 7 частично);
+- production-like performance/capacity/long-soak/staging validation **deferred**, controlled-host M15 evidence tooling смержено и провалидировано mechanics-only (unit/contract tests, CI smoke), но не выполнено на реальном dedicated host/staging;
+- отложенные пункты остаются открытыми в GitHub Issue #20 и в `docs/POST_RELEASE_VALIDATION_v0.1.0.md`;
+- CI/shared-runner numeric results (`evidence_class = harness_only`) не являются controlled evidence и не промоутируются в `controlled` для этого релиза;
+- эта секция не отменяет разделы 5/6/8/9 ниже — она документирует, почему их checkbox остаётся open at tag time, и куда смотреть за прогрессом.
+
 ## 1. Source and scope
 
-Текущая M13 production-code baseline: `249cf1d013fc04db8cebd54ae4e061b879c1f381` в `main`.
+Финальный release commit (M14 + M15 merged): `c22867c0d643dea069dd1bc605540dfe5f1c17be` в `main`.
 
 - [x] grpc-web v0.1 scope заморожен: unary binary/text + server streaming;
 - [x] client streaming, bidi, grpc-web JSON остаются вне scope;
 - [x] CORS/auth/routing/retries/service discovery не перенесены внутрь модуля;
 - [x] M13 lifecycle/soak harness merged в `main`;
-- [ ] финальный release commit M14 находится в `main`;
-- [ ] release source tree clean;
-- [ ] release notes/changelog указывают на финальный release commit, а не более раннюю baseline.
+- [x] финальный release commit M14 находится в `main` (`4b7bc61468485f3d7266de0d81d614b2b8daaecd`, PR #17);
+- [x] release source tree clean;
+- [x] release notes/changelog указывают на финальный release commit `c22867c0d643dea069dd1bc605540dfe5f1c17be`, а не более раннюю baseline.
+
+M15 controlled-host/staging **tooling** (PR #21) также смержено в этот же commit; сами controlled/soak/staging *evidence* runs остаются deferred (см. POST-RELEASE VALIDATION).
 
 ## 2. Compatibility and code CI
 
@@ -29,20 +41,20 @@ M8–M13 уже доказали работоспособность test harness
 
 Release gates:
 
-- [ ] stable 1.30.4 + GCC build/load green на exact release commit;
-- [ ] stable 1.30.4 + Clang build/load green на exact release commit;
-- [ ] mainline 1.31.3 + GCC build/load green на exact release commit;
-- [ ] mainline 1.31.3 + Clang build/load green на exact release commit;
-- [ ] protocol suite green;
-- [ ] Envoy differential suite green;
-- [ ] Chromium real React/`grpc-web` suite green;
-- [ ] Firefox real React/`grpc-web` suite green;
-- [ ] WebKit real React/`grpc-web` suite green;
-- [ ] ASAN/UBSAN green;
-- [ ] Base64/frame fuzz smoke green;
-- [ ] media-type/malformed-frame/transport-reset/logging hardening green.
+- [x] stable 1.30.4 + GCC build/load green на exact release commit;
+- [x] stable 1.30.4 + Clang build/load green на exact release commit;
+- [x] mainline 1.31.3 + GCC build/load green на exact release commit;
+- [x] mainline 1.31.3 + Clang build/load green на exact release commit;
+- [x] protocol suite green (`integration` 1.30.4/1.31.3);
+- [x] Envoy differential suite green (`integration`);
+- [x] Chromium real React/`grpc-web` suite green;
+- [x] Firefox real React/`grpc-web` suite green;
+- [x] WebKit real React/`grpc-web` suite green;
+- [x] ASAN/UBSAN green (`hardening`);
+- [x] Base64/frame fuzz smoke green (`hardening`);
+- [x] media-type/malformed-frame/transport-reset/logging hardening green.
 
-IDs/URLs exact release CI runs должны быть сохранены в release evidence/release notes.
+Exact release CI run: post-merge `ci` workflow run id `32039399834`, commit `c22867c0d643dea069dd1bc605540dfe5f1c17be`, result `success` (all 17 jobs green: unit, hardening, build-module x4, package-smoke, integration x2, browser x3, perf-smoke/h2-smoke/loadgen/capacity-smoke x2).
 
 ## 3. M14 release evidence tooling
 
@@ -55,9 +67,9 @@ Tooling считается реализованным только после me
 - [x] final verdict требует `raw_revalidation.valid == true` для controlled evidence;
 - [x] `make release-check` формирует self-contained evidence bundle;
 - [x] shared-CI design требует `harness_only/inconclusive` и явный `revalidation.skipped=harness_only`;
-- [ ] exact M14 PR head release-evidence workflow green;
-- [ ] M14 merged в `main`;
-- [ ] post-merge release-evidence mechanics run green.
+- [x] exact M14 PR head release-evidence workflow green (PR #17);
+- [x] M14 merged в `main` (`4b7bc61468485f3d7266de0d81d614b2b8daaecd`);
+- [x] post-merge release-evidence mechanics run green (`bundle-mechanics`/`evaluator` jobs green on PR #21 and post-merge `main` run `32039399834`).
 
 Подробности: `docs/RELEASE_EVIDENCE.md`.
 
@@ -89,7 +101,7 @@ make release-check
 - [ ] artifact сохранён вместе с release evidence bundle;
 - [ ] compatibility disclaimer для distro/vendor NGINX сохранён.
 
-## 5. Controlled-host performance evidence
+## 5. Controlled-host performance evidence — DEFERRED for v0.1.0 (see POST-RELEASE VALIDATION, Issue #20)
 
 Shared GitHub runner не закрывает этот раздел.
 
@@ -109,7 +121,7 @@ Shared GitHub runner не закрывает этот раздел.
 - [ ] повторно вычисленные `capacity.revalidated.json` совпадают с исходными `capacity.json`;
 - [ ] повторно вычисленный `decision.revalidated.json` совпадает с исходным `decision.json`.
 
-## 6. Strict soak evidence
+## 6. Strict soak evidence — DEFERRED for v0.1.0 (see POST-RELEASE VALIDATION, Issue #20)
 
 Shared `perf-soak-smoke` проверяет orchestration и **не закрывает этот раздел**.
 
@@ -137,7 +149,9 @@ Shared `perf-soak-smoke` проверяет orchestration и **не закрыв
 - [ ] 8h artifact сохранён рядом с release evidence;
 - [ ] если 8h recommendation сознательно пропущена, решение и rationale зафиксированы вручную.
 
-## 7. Final M14 bundle
+## 7. Final M14 bundle — controlled/soak inputs DEFERRED for v0.1.0 (see POST-RELEASE VALIDATION, Issue #20)
+
+This bundle requires the section 5/6/8 evidence above; it cannot be produced until that evidence exists, so it is deferred alongside them for this release.
 
 Ожидаемый bundle:
 
@@ -163,7 +177,7 @@ dist/release/v0.1.0-rc/
 
 `release_candidate` — это machine-checkable M14 state, а не разрешение автоматически ставить tag.
 
-## 8. Staging acceptance
+## 8. Staging acceptance — DEFERRED for v0.1.0 (see POST-RELEASE VALIDATION, Issue #20)
 
 Artifact устанавливается тем же способом, который будет использовать production.
 
@@ -182,12 +196,12 @@ Artifact устанавливается тем же способом, котор
 
 ## 9. Tag and GitHub Release
 
-До закрытия source/CI/artifact/controlled/soak/staging gates tag не создаётся.
+Policy exception for `v0.1.0` (see POST-RELEASE VALIDATION выше): тег создаётся после закрытия source/CI/artifact/package gates, **без** ожидания controlled/soak/staging/rollback (разделы 5/6/8), которые сознательно deferred в Issue #20.
 
-- [ ] финальный release commit находится в `main`;
-- [ ] post-merge exact-commit CI green;
-- [ ] final controlled M14 bundle сохранён;
-- [ ] staging acceptance закрыт;
+- [x] финальный release commit находится в `main`;
+- [x] post-merge exact-commit CI green;
+- [ ] final controlled M14 bundle — deferred (Issue #20);
+- [ ] staging acceptance — deferred (Issue #20);
 - [ ] tag `v0.1.0` вручную указывает на exact release commit;
 - [ ] GitHub Release создан из `docs/RELEASE_NOTES_v0.1.0.md`;
 - [ ] published artifact checksums записаны в release notes;
