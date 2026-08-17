@@ -8,6 +8,12 @@ BENCH_DIR=${RC_BENCHMARK_DIR:-}
 SOAK_DIR=${RC_SOAK_DIR:-}
 GATES=${RELEASE_GATES:-}
 OUTPUT_DIR=${RC_RELEASE_OUTPUT_DIR:-"$ROOT/dist/release/v0.1.0-rc"}
+OUTPUT_DIR=$(python3 - "$OUTPUT_DIR" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).resolve())
+PY
+)
 
 for pair in \
   "RC_BENCHMARK_DIR:$BENCH_DIR" \
@@ -33,6 +39,10 @@ for path in \
     exit 2
   fi
 done
+if [[ -e "$OUTPUT_DIR" ]]; then
+  echo "RC release output already exists; refusing to overwrite evidence: $OUTPUT_DIR" >&2
+  exit 2
+fi
 
 mapfile -t META < <(python3 - "$BENCH_DIR/manifest.json" "$BENCH_DIR/rc-benchmark.json" "$BENCH_DIR/selected-attempts.json" "$SOAK_DIR/rc-soak-link.json" <<'PY'
 import json
