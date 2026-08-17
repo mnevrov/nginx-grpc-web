@@ -12,6 +12,7 @@ on:
       - "tests/browser/playwright.staging.config.ts"
       - "tests/browser/staging/**"
       - "scripts/run-staging-browser.sh"
+      - "staging/**"
       - ".github/workflows/rc-benchmark.yml"
       - "Makefile"
       - "docs/**"
@@ -40,6 +41,8 @@ jobs:
         run: make rc-benchmark-test
       - name: M15 RC soak provenance failure-mode tests
         run: make rc-soak-test
+      - name: M15 staging/rollback evidence failure-mode tests
+        run: python3 staging/test_evidence.py -q
       - name: RC operator shell syntax
         run: |
           bash -n perf/run-rc.sh
