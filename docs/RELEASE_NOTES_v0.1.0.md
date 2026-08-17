@@ -93,6 +93,39 @@ commit: 82729f5f3e026df820b01cfb5a9d2d36a7f31d85
 
 Это подтверждённая code baseline для `v0.1.0`. Release-prep PR добавляет только changelog/release metadata. После его merge тег `v0.1.0` должен указывать на resulting `main` commit **только после** зелёного post-merge CI этого commit.
 
+M14/M15 (PR #17, PR #21) merge commit и post-merge CI:
+
+```text
+release_commit: c22867c0d643dea069dd1bc605540dfe5f1c17be
+post-merge ci run: 32039399834
+result: success
+```
+
+## Validation status
+
+Completed before v0.1.0:
+
+- protocol/unit/integration CI;
+- NGINX compatibility matrix (1.30.4 / 1.31.3, GCC / Clang);
+- browser grpc-web regression tests (Chromium/Firefox/WebKit);
+- sanitizers/hardening (ASAN/UBSAN, Base64/frame fuzz smoke);
+- packaging and release-evidence mechanics (M14);
+- M15 benchmark/soak/staging tooling validation (unit/contract tests, CI mechanics).
+
+Deferred post-release validation:
+
+- dedicated-host capacity benchmark;
+- five-repeat controlled performance campaign;
+- 2-hour strict soak;
+- recommended 8-hour soak;
+- real staging deployment;
+- production-like React acceptance;
+- Envoy rollback exercise.
+
+The deferred tests do not change the v0.1 protocol scope. Their results will be tracked separately in [Issue #20](https://github.com/mnevrov/nginx-grpc-web/issues/20) and in `docs/POST_RELEASE_VALIDATION_v0.1.0.md`.
+
+Any prior CI/shared-runner numeric observations remain `harness_only` / non-production measurements and are not promoted to `controlled` evidence. This release does not claim production-proven capacity, a specific performance delta versus Envoy, or a specific stream-concurrency figure — those claims require the deferred controlled-host evidence above.
+
 ## Artifact
 
 Рекомендуемый baseline artifact:
