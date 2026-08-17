@@ -5,6 +5,12 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BROWSER=${STAGING_BROWSER:-chromium}
 LABEL=${STAGING_LABEL:-native-module}
 OUTPUT_DIR=${STAGING_OUTPUT_DIR:-"$ROOT/perf/results/staging-$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"}
+OUTPUT_DIR=$(python3 - "$OUTPUT_DIR" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).resolve())
+PY
+)
 
 for name in STAGING_ENDPOINT STAGING_UNAVAILABLE_ENDPOINT STAGING_TIMEOUT_ENDPOINT; do
   if [[ -z "${!name:-}" ]]; then
@@ -30,6 +36,9 @@ if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]]; the
 fi
 
 SOURCE_COMMIT=$(git -C "$ROOT" rev-parse HEAD)
+export SOURCE_COMMIT
+export STAGING_BROWSER_RESOLVED="$BROWSER"
+export STAGING_LABEL_RESOLVED="$LABEL"
 mkdir -p "$OUTPUT_DIR"
 
 python3 - "$OUTPUT_DIR/manifest.json" <<'PY'
@@ -54,36 +63,37 @@ Path(sys.argv[1]).write_text(json.dumps({
     "version": 1,
     "created_at_utc": datetime.now(timezone.utc).isoformat(),
     "git_commit": os.environ["SOURCE_COMMIT"],
-    "label": os.environ.get("STAGING_LABEL", "native-module"),
-    "browser": os.environ.get("STAGING_BROWSER", "chromium"),
+    "label": os.environ["STAGING_LABEL_RESOLVED"],
+    "browser": os.environ["STAGING_BROWSER_RESOLVED"],
     "endpoints": endpoints,
 }, indent=2) + "\n", encoding="utf-8")
 PY
 
 rm -rf "$ROOT/tests/browser/test-results"
+set +e
 (
   cd "$ROOT/tests/browser"
   npm install --package-lock=false --no-audit --no-fund
-  set +e
   npx playwright test -c playwright.staging.config.ts --project="$BROWSER"
-  test_rc=$?
-  set -e
-  printf '%s\n' "$test_rc" > "$OUTPUT_DIR/playwright-exit-code.txt"
-  if [[ -d test-results ]]; then
-    cp -a test-results "$OUTPUT_DIR/browser-test-results"
-  fi
-  exit "$test_rc"
 )
+test_rc=$?
+set -e
 
-python3 - "$OUTPUT_DIR/manifest.json" "$OUTPUT_DIR/playwright-exit-code.txt" <<'PY'
+printf '%s\n' "$test_rc" > "$OUTPUT_DIR/playwright-exit-code.txt"
+if [[ -d "$ROOT/tests/browser/test-results" ]]; then
+  cp -a "$ROOT/tests/browser/test-results" "$OUTPUT_DIR/browser-test-results"
+fi
+
+python3 - "$OUTPUT_DIR/manifest.json" "$test_rc" <<'PY'
 import json
 import sys
 from pathlib import Path
 manifest_path = Path(sys.argv[1])
 value = json.loads(manifest_path.read_text())
-value["playwright_exit_code"] = int(Path(sys.argv[2]).read_text().strip())
+value["playwright_exit_code"] = int(sys.argv[2])
 value["browser_acceptance_passed"] = value["playwright_exit_code"] == 0
 manifest_path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 PY
 
 printf 'staging browser evidence: %s\n' "$OUTPUT_DIR"
+exit "$test_rc"
