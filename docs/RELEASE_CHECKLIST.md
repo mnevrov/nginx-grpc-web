@@ -6,7 +6,7 @@
 
 ## POST-RELEASE VALIDATION (policy exception for v0.1.0)
 
-Решение по этому релизу: `v0.1.0` тегируется и публикуется **без** дождавшись controlled-host capacity benchmark, 2h/8h strict soak, real staging acceptance и practical Envoy rollback exercise. Эти проверки сознательно отложены, а не пропущены навсегда.
+Решение по этому релизу: `v0.1.0` тегируется и публикуется **без** ожидания controlled-host capacity benchmark, 2h/8h strict soak, real staging acceptance и practical Envoy rollback exercise. Эти проверки сознательно отложены, а не пропущены навсегда.
 
 - functional/protocol/CI validation выполнена и является release-blocking (разделы 1–4, 7 частично);
 - production-like performance/capacity/long-soak/staging validation **deferred**, controlled-host M15 evidence tooling смержено и провалидировано mechanics-only (unit/contract tests, CI smoke), но не выполнено на реальном dedicated host/staging;
@@ -16,21 +16,23 @@
 
 ## 1. Source and scope
 
-Финальный release commit (M14 + M15 merged): `c22867c0d643dea069dd1bc605540dfe5f1c17be` в `main`.
+M15 tooling code baseline: `c22867c0d643dea069dd1bc605540dfe5f1c17be` (merge PR #21).
+
+Release metadata была смержена после этой code baseline (PR #22 и последующие provenance-only release-prep изменения). **Авторитетный final release commit — commit, на который фактически указывает Git tag `v0.1.0`**. До публикации не следует фиксировать более ранний milestone SHA как tag target.
 
 - [x] grpc-web v0.1 scope заморожен: unary binary/text + server streaming;
 - [x] client streaming, bidi, grpc-web JSON остаются вне scope;
 - [x] CORS/auth/routing/retries/service discovery не перенесены внутрь модуля;
 - [x] M13 lifecycle/soak harness merged в `main`;
-- [x] финальный release commit M14 находится в `main` (`4b7bc61468485f3d7266de0d81d614b2b8daaecd`, PR #17);
-- [x] release source tree clean;
-- [x] release notes/changelog указывают на финальный release commit `c22867c0d643dea069dd1bc605540dfe5f1c17be`, а не более раннюю baseline.
+- [x] M14 находится в `main` (`4b7bc61468485f3d7266de0d81d614b2b8daaecd`, PR #17);
+- [x] M15 tooling находится в `main` (`c22867c0d643dea069dd1bc605540dfe5f1c17be`, PR #21);
+- [x] release metadata/provenance не выдают M15 milestone SHA за финальный tag target;
 
-M15 controlled-host/staging **tooling** (PR #21) также смержено в этот же commit; сами controlled/soak/staging *evidence* runs остаются deferred (см. POST-RELEASE VALIDATION).
+M15 controlled-host/staging **tooling** смержено; сами controlled/soak/staging *evidence* runs остаются deferred (см. POST-RELEASE VALIDATION).
 
 ## 2. Compatibility and code CI
 
-M8–M13 уже доказали работоспособность test harness и текущего protocol contract, но перед tag требуется **post-merge run на exact release commit**.
+M8–M13 доказали работоспособность test harness и текущего protocol contract; перед tag требуется **post-merge run на exact commit, который станет tag target**.
 
 Поддерживаемый v0.1 matrix:
 
@@ -41,10 +43,10 @@ M8–M13 уже доказали работоспособность test harness
 
 Release gates:
 
-- [x] stable 1.30.4 + GCC build/load green на exact release commit;
-- [x] stable 1.30.4 + Clang build/load green на exact release commit;
-- [x] mainline 1.31.3 + GCC build/load green на exact release commit;
-- [x] mainline 1.31.3 + Clang build/load green на exact release commit;
+- [x] stable 1.30.4 + GCC build/load green;
+- [x] stable 1.30.4 + Clang build/load green;
+- [x] mainline 1.31.3 + GCC build/load green;
+- [x] mainline 1.31.3 + Clang build/load green;
 - [x] protocol suite green (`integration` 1.30.4/1.31.3);
 - [x] Envoy differential suite green (`integration`);
 - [x] Chromium real React/`grpc-web` suite green;
@@ -54,13 +56,18 @@ Release gates:
 - [x] Base64/frame fuzz smoke green (`hardening`);
 - [x] media-type/malformed-frame/transport-reset/logging hardening green.
 
-Exact release CI run: post-merge `ci` workflow run id `32039399834`, commit `c22867c0d643dea069dd1bc605540dfe5f1c17be`, result `success` (all 17 jobs green: unit, hardening, build-module x4, package-smoke, integration x2, browser x3, perf-smoke/h2-smoke/loadgen/capacity-smoke x2).
+Validated post-merge baselines:
+
+- M15 merge `c22867c0d643dea069dd1bc605540dfe5f1c17be`: CI run `32039399834`, `success`;
+- release-metadata merge `4b20419b317fae9ce1432f03a0e62359654abaaa`: CI run `32040470473`, `success`.
+
+После merge этого provenance-fix PR final tag target должен получить собственный green post-merge CI; именно этот resulting `main` SHA допускается тегировать.
 
 ## 3. M14 release evidence tooling
 
 Tooling считается реализованным только после merge M14, но production evidence появляется только после controlled/staging выполнения.
 
-- [x] deterministic pure release evaluator реализован в M14 branch;
+- [x] deterministic pure release evaluator реализован;
 - [x] failure-mode tests включают checksum, stale SHA, host mismatch, short soak и `harness_only` promotion;
 - [x] collector пересчитывает artifact SHA256 и читает package/M12/M13 provenance;
 - [x] production path повторно вычисляет M11 capacity, M12 decision и M13 soak из raw evidence;
@@ -68,8 +75,8 @@ Tooling считается реализованным только после me
 - [x] `make release-check` формирует self-contained evidence bundle;
 - [x] shared-CI design требует `harness_only/inconclusive` и явный `revalidation.skipped=harness_only`;
 - [x] exact M14 PR head release-evidence workflow green (PR #17);
-- [x] M14 merged в `main` (`4b7bc61468485f3d7266de0d81d614b2b8daaecd`);
-- [x] post-merge release-evidence mechanics run green (`bundle-mechanics`/`evaluator` jobs green on PR #21 and post-merge `main` run `32039399834`).
+- [x] M14 merged в `main`;
+- [x] M15 tooling mechanics merged и CI validated.
 
 Подробности: `docs/RELEASE_EVIDENCE.md`.
 
@@ -92,13 +99,13 @@ RELEASE_SOAK_DIR=/data/rc/soak \
 make release-check
 ```
 
-Проверки:
+Проверки перед публикацией:
 
-- [ ] `.so` заново собран из exact release commit;
-- [ ] `MANIFEST.txt.source_commit` совпадает с release commit;
+- [ ] `.so` заново собран из exact tag-target commit;
+- [ ] `MANIFEST.txt.source_commit` совпадает с tag-target commit;
 - [ ] NGINX/compiler/platform/build mode зафиксированы;
 - [ ] SHA256 пересчитан по реальному `.so` и совпадает с `SHA256SUMS`;
-- [ ] artifact сохранён вместе с release evidence bundle;
+- [ ] artifact сохранён для загрузки в GitHub Release;
 - [ ] compatibility disclaimer для distro/vendor NGINX сохранён.
 
 ## 5. Controlled-host performance evidence — DEFERRED for v0.1.0 (see POST-RELEASE VALIDATION, Issue #20)
@@ -196,16 +203,16 @@ Artifact устанавливается тем же способом, котор
 
 ## 9. Tag and GitHub Release
 
-Policy exception for `v0.1.0` (see POST-RELEASE VALIDATION выше): тег создаётся после закрытия source/CI/artifact/package gates, **без** ожидания controlled/soak/staging/rollback (разделы 5/6/8), которые сознательно deferred в Issue #20.
+Policy exception for `v0.1.0`: тег создаётся после закрытия source/CI/artifact/package gates, **без** ожидания controlled/soak/staging/rollback (разделы 5/6/8), которые сознательно deferred в Issue #20.
 
-- [x] финальный release commit находится в `main`;
-- [x] post-merge exact-commit CI green;
+- [x] M14/M15 code/tooling merged в `main`;
+- [ ] exact final tag-target commit находится в `main` и имеет green post-merge CI;
 - [ ] final controlled M14 bundle — deferred (Issue #20);
 - [ ] staging acceptance — deferred (Issue #20);
-- [ ] tag `v0.1.0` вручную указывает на exact release commit;
+- [ ] tag `v0.1.0` вручную указывает на exact final tag-target commit;
 - [ ] GitHub Release создан из `docs/RELEASE_NOTES_v0.1.0.md`;
-- [ ] published artifact checksums записаны в release notes;
-- [ ] final CI/evidence references записаны в release notes.
+- [ ] published artifact checksums приложены к release;
+- [ ] final CI/tag references проверены перед публикацией.
 
 ## 10. Production rollout
 
