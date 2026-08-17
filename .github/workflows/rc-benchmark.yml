@@ -9,6 +9,8 @@ on:
       - "perf/rc_soak.py"
       - "perf/test_rc_soak.py"
       - "perf/run-rc-soak.sh"
+      - "tests/browser/playwright.staging.config.ts"
+      - "tests/browser/staging/**"
       - ".github/workflows/rc-benchmark.yml"
       - "Makefile"
       - "docs/**"
@@ -45,3 +47,23 @@ jobs:
         run: |
           set -euo pipefail
           test "$(python3 perf/rc.py extend --steps 25,50,100 --max-streams 1000)" = "25,50,100,200"
+
+  staging-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - working-directory: tests/browser
+        run: npm install
+      - name: Parse/list external staging acceptance tests without contacting staging
+        working-directory: tests/browser
+        env:
+          STAGING_ENDPOINT: http://staging.invalid
+          STAGING_UNAVAILABLE_ENDPOINT: http://staging-unavailable.invalid
+          STAGING_TIMEOUT_ENDPOINT: http://staging-timeout.invalid
+        run: npx playwright test --list -c playwright.staging.config.ts --project=chromium
