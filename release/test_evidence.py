@@ -16,11 +16,11 @@ def valid_bundle() -> dict:
         "release_version": "v0.1.0",
         "source": {"commit": COMMIT, "dirty": False},
         "gates": {
-            "compatibility": {"passed": True, "commit": COMMIT},
-            "protocol": {"passed": True, "commit": COMMIT},
-            "differential": {"passed": True, "commit": COMMIT},
-            "browser": {"passed": True, "commit": COMMIT},
-            "hardening": {"passed": True, "commit": COMMIT},
+            "compatibility": {"passed": True, "commit": COMMIT, "evidence_class": "controlled"},
+            "protocol": {"passed": True, "commit": COMMIT, "evidence_class": "controlled"},
+            "differential": {"passed": True, "commit": COMMIT, "evidence_class": "controlled"},
+            "browser": {"passed": True, "commit": COMMIT, "evidence_class": "controlled"},
+            "hardening": {"passed": True, "commit": COMMIT, "evidence_class": "controlled"},
         },
         "artifact": {
             "declared_sha256": SHA256,
@@ -145,6 +145,8 @@ class ReleaseEvidenceTests(unittest.TestCase):
 
     def test_harness_only_cannot_escalate_to_release_candidate(self):
         bundle = valid_bundle()
+        for gate in bundle["gates"].values():
+            gate["evidence_class"] = "harness_only"
         bundle["controlled"]["decision"].update({
             "evidence_class": "harness_only",
             "recommendation": "inconclusive",
@@ -163,7 +165,30 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertEqual(result["evidence_class"], "harness_only")
         self.assertEqual(result["verdict"], "inconclusive")
         self.assertTrue(result["mechanics_pass"])
+        self.assertEqual(result["blockers"], [])
         self.assertIn("harness_only", result["advisory"])
+
+    def test_harness_only_gate_blocks_controlled_candidate(self):
+        bundle = valid_bundle()
+        bundle["gates"]["protocol"]["evidence_class"] = "harness_only"
+        result = evaluate_release(bundle, self.policy)
+        self.assertEqual(result["evidence_class"], "controlled")
+        self.assertEqual(result["verdict"], "blocked")
+        self.assertIn("gate_protocol_evidence_class", result["blockers"])
+
+    def test_missing_gate_evidence_class_blocks_candidate(self):
+        bundle = valid_bundle()
+        del bundle["gates"]["browser"]["evidence_class"]
+        result = evaluate_release(bundle, self.policy)
+        self.assertEqual(result["verdict"], "blocked")
+        self.assertIn("gate_browser_evidence_class", result["blockers"])
+
+    def test_unknown_gate_evidence_class_blocks_candidate(self):
+        bundle = valid_bundle()
+        bundle["gates"]["hardening"]["evidence_class"] = "trusted"
+        result = evaluate_release(bundle, self.policy)
+        self.assertEqual(result["verdict"], "blocked")
+        self.assertIn("gate_hardening_evidence_class", result["blockers"])
 
     def test_missing_compatibility_gate_is_a_blocker(self):
         bundle = valid_bundle()
@@ -265,6 +290,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertIn("**`blocked`**", text)
         self.assertIn("`artifact_checksum_mismatch`", text)
         self.assertIn("`compatibility`", text)
+        self.assertIn("`controlled`", text)
 
     def test_evaluation_does_not_mutate_input(self):
         bundle = valid_bundle()
