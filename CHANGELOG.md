@@ -24,7 +24,8 @@
 - real React + `grpc-web` browser tests;
 - compatibility matrix для NGINX 1.30.4 / 1.31.3, GCC / Clang, Chromium / Firefox / WebKit;
 - versioned dynamic-module packaging с manifest и SHA256;
-- production config, observability, canary/rollback и release checklist.
+- production config, observability, canary/rollback и release checklist;
+- M15 controlled-host RC benchmark / strict soak / staging-acceptance tooling and orchestration (mechanics validated by CI; controlled/soak/staging *evidence* deferred, see Validation status below and Issue #20).
 
 ### Scope
 
