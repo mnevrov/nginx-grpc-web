@@ -32,6 +32,8 @@ jobs:
           python-version: "3.12"
       - name: M15 RC evaluator failure-mode tests
         run: python3 perf/test_rc.py -q
+      - name: RC operator shell syntax
+        run: bash -n perf/run-rc.sh
       - name: Staircase CLI smoke
         run: |
           set -euo pipefail
