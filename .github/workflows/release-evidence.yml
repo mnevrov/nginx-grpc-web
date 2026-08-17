@@ -16,6 +16,9 @@ concurrency:
   group: release-evidence-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   evaluator:
     runs-on: ubuntu-latest
@@ -23,6 +26,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -35,6 +39,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -118,6 +123,7 @@ jobs:
           assert result["mechanics_pass"] is True, result
           assert result["blockers"] == [], result
           assert result["gates"]["compatibility"]["passed"] is True, result
+          assert result["gates"]["compatibility"]["evidence_class"] == "harness_only", result
           assert "harness_only" in result["advisory"], result
           assert result["raw_revalidation"]["valid"] is None, result
           assert result["raw_revalidation"]["skipped"] == "harness_only", result
