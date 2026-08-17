@@ -46,6 +46,10 @@ require_positive_int() {
 for cmd in git python3 docker taskset; do
   require_cmd "$cmd"
 done
+if ! docker version >/dev/null 2>&1; then
+  echo "Docker daemon is not available" >&2
+  exit 2
+fi
 
 for name in PERF_GATEWAY_CPUSET PERF_BACKEND_CPUSET PERF_LOADGEN_CPUSET; do
   if [[ -z "${!name:-}" ]]; then
@@ -78,6 +82,23 @@ for pair in \
   require_positive_int "${pair%%:*}" "${pair#*:}" 1
 done
 
+# Validate staircase syntax before any expensive work.
+python3 "$ROOT/perf/rc.py" extend --steps "$TYPICAL_STEPS" --max-streams "$TYPICAL_MAX_STREAMS" >/dev/null || {
+  # A ceiling equal to the last configured step is legal only if the first attempt reaches both boundaries.
+  python3 - "$TYPICAL_STEPS" <<'PY'
+import sys
+steps = [int(x) for x in sys.argv[1].split(',')]
+assert steps and all(a < b for a, b in zip(steps, steps[1:])) and all(x > 0 for x in steps)
+PY
+}
+python3 - "$LARGE4M_STEPS" "$SLOW_STEPS" "$LARGE8M_STEPS" <<'PY'
+import sys
+for raw in sys.argv[1:]:
+    steps = [int(x) for x in raw.split(',')]
+    if not steps or any(x <= 0 for x in steps) or any(a >= b for a, b in zip(steps, steps[1:])):
+        raise SystemExit(f"invalid RC staircase: {raw}")
+PY
+
 if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]]; then
   echo "RC benchmark requires a clean git worktree" >&2
   exit 2
@@ -101,6 +122,12 @@ python3 "$ROOT/perf/host_info.py" \
 
 SOURCE_COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 export SOURCE_COMMIT
+export RC_OUTPUT_DIR_RESOLVED="$OUTPUT_ROOT"
+export NGINX_VERSION_RESOLVED="$NGINX_VERSION"
+export BUILD_CC_RESOLVED="$BUILD_CC"
+export RC_REPEATS_RESOLVED="$REPEATS"
+export RC_MAX_ATTEMPTS_RESOLVED="$MAX_ATTEMPTS"
+
 python3 - "$OUTPUT_ROOT/manifest.json" <<'PY'
 import json
 import os
@@ -108,7 +135,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-preflight = json.loads(Path(os.environ["RC_OUTPUT_DIR_RESOLVED"] + "/preflight.json").read_text())
+root = Path(os.environ["RC_OUTPUT_DIR_RESOLVED"])
+preflight = json.loads((root / "preflight.json").read_text())
 out = Path(sys.argv[1])
 data = {
     "version": 1,
@@ -137,7 +165,7 @@ run_scenario() {
   local name=$1 slo=$2 steps=$3 max_streams=$4 transport=$5 payload=$6 messages=$7 delay=$8 consumer_delay=$9
   local scenario_root="$OUTPUT_ROOT/$name"
   local current_steps=$steps
-  local attempt attempt_dir check_rc boundaries ready next_steps
+  local attempt attempt_dir check_rc boundaries next_steps
 
   mkdir -p "$scenario_root"
   cp "$slo" "$scenario_root/slo-input.json"
@@ -199,12 +227,12 @@ PY
       return "$check_rc"
     fi
 
-    read -r boundaries ready < <(python3 - "$attempt_dir/rc-scenario.json" <<'PY'
+    boundaries=$(python3 - "$attempt_dir/rc-scenario.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 value = json.loads(Path(sys.argv[1]).read_text())
-print(str(bool(value.get("boundaries_complete"))).lower(), str(bool(value.get("ready"))).lower())
+print(str(bool(value.get("boundaries_complete"))).lower())
 PY
 )
     if [[ "$boundaries" == "true" ]]; then
@@ -223,43 +251,6 @@ PY
   echo "RC scenario=$name exhausted attempts unexpectedly" >&2
   return 3
 }
-
-# Resolve values for the immutable top-level manifest without depending on shell interpolation in Python.
-export RC_OUTPUT_DIR_RESOLVED="$OUTPUT_ROOT"
-export NGINX_VERSION_RESOLVED="$NGINX_VERSION"
-export BUILD_CC_RESOLVED="$BUILD_CC"
-export RC_REPEATS_RESOLVED="$REPEATS"
-export RC_MAX_ATTEMPTS_RESOLVED="$MAX_ATTEMPTS"
-# Re-write manifest now that all exported values are available.
-python3 - "$OUTPUT_ROOT/manifest.json" <<'PY'
-import json
-import os
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-root = Path(os.environ["RC_OUTPUT_DIR_RESOLVED"])
-preflight = json.loads((root / "preflight.json").read_text())
-out = Path(sys.argv[1])
-data = {
-    "version": 1,
-    "created_at_utc": datetime.now(timezone.utc).isoformat(),
-    "git_commit": os.environ["SOURCE_COMMIT"],
-    "nginx_version": os.environ["NGINX_VERSION_RESOLVED"],
-    "build_cc": os.environ["BUILD_CC_RESOLVED"],
-    "repeats": int(os.environ["RC_REPEATS_RESOLVED"]),
-    "max_attempts": int(os.environ["RC_MAX_ATTEMPTS_RESOLVED"]),
-    "gateway_cpuset": os.environ["PERF_GATEWAY_CPUSET"],
-    "backend_cpuset": os.environ["PERF_BACKEND_CPUSET"],
-    "loadgen_cpuset": os.environ["PERF_LOADGEN_CPUSET"],
-    "host_fingerprint": preflight["fingerprint"],
-    "large8m": {
-        "requested": bool(os.environ.get("RC_LARGE8M_SLO", "")),
-        "skip_reason": os.environ.get("RC_SKIP_LARGE8M_REASON", ""),
-    },
-}
-out.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-PY
 
 run_scenario typical "$RC_TYPICAL_SLO" "$TYPICAL_STEPS" "$TYPICAL_MAX_STREAMS" text 4096 20 20 0
 run_scenario large4m "$RC_LARGE4M_SLO" "$LARGE4M_STEPS" "$LARGE4M_MAX_STREAMS" text 4194304 8 50 0
@@ -281,19 +272,37 @@ python3 "$ROOT/perf/rc.py" aggregate \
   --output "$OUTPUT_ROOT/rc-benchmark.json" \
   --markdown "$OUTPUT_ROOT/rc-benchmark.md"
 
-python3 - "$OUTPUT_ROOT/selected-attempts.json" <<PY
+selection_args=(
+  "$OUTPUT_ROOT/selected-attempts.json"
+  "typical=${SELECTED_ATTEMPT[typical]}"
+  "large4m=${SELECTED_ATTEMPT[large4m]}"
+  "slow=${SELECTED_ATTEMPT[slow]}"
+)
+if [[ -n "${RC_LARGE8M_SLO:-}" ]]; then
+  selection_args+=("large8m=${SELECTED_ATTEMPT[large8m]}")
+fi
+python3 - "${selection_args[@]}" <<'PY'
 import json
+import sys
 from pathlib import Path
-out = Path(${OUTPUT_ROOT@Q}) / "selected-attempts.json"
-data = {
-    "typical": ${SELECTED_ATTEMPT[typical]@Q},
-    "large4m": ${SELECTED_ATTEMPT[large4m]@Q},
-    "slow": ${SELECTED_ATTEMPT[slow]@Q},
-}
-large8 = ${RC_LARGE8M_SLO:-}
-if large8:
-    data["large8m"] = ${SELECTED_ATTEMPT[large8m]:-}
+
+out = Path(sys.argv[1])
+data = {}
+for raw in sys.argv[2:]:
+    name, path = raw.split("=", 1)
+    data[name] = path
 out.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+
+# Ensure the aggregate still refers to the exact preflight host fingerprint.
+python3 - "$OUTPUT_ROOT/preflight.json" "$OUTPUT_ROOT/rc-benchmark.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+preflight = json.loads(Path(sys.argv[1]).read_text())
+summary = json.loads(Path(sys.argv[2]).read_text())
+if preflight.get("fingerprint") != summary.get("host_fingerprint"):
+    raise SystemExit("RC aggregate host fingerprint does not match top-level strict preflight")
 PY
 
 printf 'RC benchmark output: %s\n' "$OUTPUT_ROOT"
