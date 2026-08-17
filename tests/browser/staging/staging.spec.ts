@@ -19,8 +19,8 @@ async function start(page: Page, target: string, options: Record<string, string>
 
 async function waitTerminal(page: Page, timeout = 10_000) {
   await expect
-    .poll(() => page.evaluate(() => (window as any).__grpcWebHarness?.status), { timeout })
-    .not.toBe("running");
+    .poll(() => page.evaluate(() => (window as any).__grpcWebHarness?.status ?? "uninitialized"), { timeout })
+    .toMatch(/^(done|error|cancelled)$/);
   return page.evaluate(() => (window as any).__grpcWebHarness);
 }
 
