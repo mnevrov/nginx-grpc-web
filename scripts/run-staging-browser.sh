@@ -34,6 +34,10 @@ if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]]; the
   echo "staging acceptance requires a clean git worktree before execution" >&2
   exit 2
 fi
+if [[ ! -f "$ROOT/tests/browser/package-lock.json" ]]; then
+  echo "tests/browser/package-lock.json is required for reproducible staging acceptance" >&2
+  exit 2
+fi
 
 SOURCE_COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 export SOURCE_COMMIT
@@ -73,7 +77,7 @@ rm -rf "$ROOT/tests/browser/test-results"
 set +e
 (
   cd "$ROOT/tests/browser"
-  npm install --package-lock=false --no-audit --no-fund
+  npm ci --no-audit --no-fund
   npx playwright test -c playwright.staging.config.ts --project="$BROWSER"
 )
 test_rc=$?
