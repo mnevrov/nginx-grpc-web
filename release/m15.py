@@ -38,6 +38,11 @@ def non_empty_file(path: Path, label: str) -> str:
     return text
 
 
+def _append_once(items: list[str], item: str) -> None:
+    if item not in items:
+        items.append(item)
+
+
 def evaluate(
     *,
     benchmark_manifest: dict[str, Any],
@@ -54,76 +59,96 @@ def evaluate(
     host = required_string(benchmark.get("host_fingerprint"), "benchmark.host_fingerprint")
 
     if benchmark.get("ready") is not True or benchmark.get("blockers") not in ([], None):
-        blockers.append("benchmark_not_ready")
+        _append_once(blockers, "benchmark_not_ready")
     if benchmark_manifest.get("git_commit") != source:
-        blockers.append("benchmark_manifest_commit")
+        _append_once(blockers, "benchmark_manifest_commit")
     if benchmark_manifest.get("host_fingerprint") != host:
-        blockers.append("benchmark_manifest_host")
+        _append_once(blockers, "benchmark_manifest_host")
+
+    scenarios = benchmark.get("scenarios")
+    if not isinstance(scenarios, dict):
+        _append_once(blockers, "benchmark_scenarios_missing")
+        scenarios = {}
+    for name in ("typical", "large4m", "slow"):
+        scenario = scenarios.get(name)
+        if not isinstance(scenario, dict):
+            _append_once(blockers, f"benchmark_scenario_{name}_missing")
+        elif scenario.get("ready") is not True or scenario.get("evidence_class") != "controlled":
+            _append_once(blockers, f"benchmark_scenario_{name}_not_ready")
 
     large8m = benchmark_manifest.get("large8m")
+    large8m_requested = False
+    large8m_skip_reason = ""
     if not isinstance(large8m, dict):
-        blockers.append("large8m_policy_missing")
+        _append_once(blockers, "large8m_policy_missing")
     else:
-        requested = large8m.get("requested") is True
+        large8m_requested = large8m.get("requested") is True
         skip_reason = large8m.get("skip_reason")
-        if not requested and (not isinstance(skip_reason, str) or not skip_reason.strip()):
-            blockers.append("large8m_no_run_or_reason")
+        large8m_skip_reason = skip_reason.strip() if isinstance(skip_reason, str) else ""
+        if large8m_requested:
+            scenario = scenarios.get("large8m")
+            if not isinstance(scenario, dict):
+                _append_once(blockers, "benchmark_scenario_large8m_missing")
+            elif scenario.get("ready") is not True or scenario.get("evidence_class") != "controlled":
+                _append_once(blockers, "benchmark_scenario_large8m_not_ready")
+        elif not large8m_skip_reason:
+            _append_once(blockers, "large8m_no_run_or_reason")
 
     if soak.get("ready") is not True:
-        blockers.append("soak_not_ready")
+        _append_once(blockers, "soak_not_ready")
     if soak.get("source_commit") != source:
-        blockers.append("soak_commit")
+        _append_once(blockers, "soak_commit")
     if soak.get("host_fingerprint") != host:
-        blockers.append("soak_host")
+        _append_once(blockers, "soak_host")
     duration = soak.get("duration_seconds")
     if isinstance(duration, bool) or not isinstance(duration, (int, float)):
-        blockers.append("soak_duration")
+        _append_once(blockers, "soak_duration")
         duration_value = 0.0
     else:
         duration_value = float(duration)
         if duration_value < 7200.0:
-            blockers.append("soak_duration")
+            _append_once(blockers, "soak_duration")
     if duration_value < 28800.0:
         if not eight_hour_waiver:
-            blockers.append("eight_hour_soak_or_waiver")
+            _append_once(blockers, "eight_hour_soak_or_waiver")
         else:
             advisory.append("eight_hour_soak_waived")
 
     if staging.get("verdict") != "staging_pass":
-        blockers.append("staging_not_ready")
+        _append_once(blockers, "staging_not_ready")
     if staging.get("source_commit") != source:
-        blockers.append("staging_commit")
+        _append_once(blockers, "staging_commit")
 
     if release_evidence.get("source_commit") != source:
-        blockers.append("m14_commit")
+        _append_once(blockers, "m14_commit")
     if release_evidence.get("evidence_class") != "controlled":
-        blockers.append("m14_not_controlled")
+        _append_once(blockers, "m14_not_controlled")
     if release_evidence.get("verdict") != "release_candidate":
-        blockers.append("m14_verdict")
+        _append_once(blockers, "m14_verdict")
     if release_evidence.get("mechanics_pass") is not True:
-        blockers.append("m14_mechanics")
+        _append_once(blockers, "m14_mechanics")
     if release_evidence.get("blockers") not in ([], None):
-        blockers.append("m14_blockers")
+        _append_once(blockers, "m14_blockers")
     raw = release_evidence.get("raw_revalidation")
     if not isinstance(raw, dict) or raw.get("valid") is not True:
-        blockers.append("m14_raw_revalidation")
+        _append_once(blockers, "m14_raw_revalidation")
 
     controlled = release_evidence.get("controlled")
     if not isinstance(controlled, dict) or controlled.get("host_fingerprint") != host:
-        blockers.append("m14_controlled_host")
+        _append_once(blockers, "m14_controlled_host")
     release_soak = release_evidence.get("soak")
     if not isinstance(release_soak, dict) or release_soak.get("host_fingerprint") != host:
-        blockers.append("m14_soak_host")
+        _append_once(blockers, "m14_soak_host")
 
     release_artifact = release_evidence.get("artifact")
     staging_package = staging.get("package")
     if not isinstance(release_artifact, dict) or not isinstance(staging_package, dict):
-        blockers.append("artifact_identity_missing")
+        _append_once(blockers, "artifact_identity_missing")
     else:
         release_sha = release_artifact.get("sha256")
         staging_sha = staging_package.get("sha256")
         if not isinstance(release_sha, str) or not release_sha or release_sha != staging_sha:
-            blockers.append("staging_release_artifact_mismatch")
+            _append_once(blockers, "staging_release_artifact_mismatch")
 
     return {
         "version": 1,
@@ -135,8 +160,9 @@ def evaluate(
         "advisory": advisory,
         "strict_soak_duration_seconds": duration_value,
         "eight_hour_waiver_recorded": bool(eight_hour_waiver),
-        "large8m_requested": isinstance(large8m, dict) and large8m.get("requested") is True,
-        "large8m_skip_reason": large8m.get("skip_reason", "") if isinstance(large8m, dict) else "",
+        "required_scenarios": ["typical", "large4m", "slow"],
+        "large8m_requested": large8m_requested,
+        "large8m_skip_reason": large8m_skip_reason,
         "m14_verdict": release_evidence.get("verdict", ""),
         "staging_verdict": staging.get("verdict", ""),
     }
