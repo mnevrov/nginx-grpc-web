@@ -13,7 +13,9 @@ M15 must measure a real capacity boundary on controlled hardware. Shared CI is u
 
 ## Dependency
 
-This branch is stacked on M14. Until M14 is merged, M15 remains dependent work. Final release evidence must later be regenerated from the eventual exact release commit in `main`.
+M14 is merged and validated on `main` at baseline `4b7bc61468485f3d7266de0d81d614b2b8daaecd` with green post-merge CI. M15 must preserve the M14 fail-closed evidence model and feed its selected controlled artifacts back into `make release-check` on the eventual exact release commit.
+
+If `main` advances while M15 is open, synchronize M15 before final validation; never use stale M14 provenance assumptions.
 
 ## Scope freeze
 
@@ -23,7 +25,7 @@ If controlled testing discovers a production defect, isolate it in a dedicated r
 
 ## Primary deliverables
 
-1. One operator entry point (`make rc-benchmark` or equivalent).
+1. One operator entry point (`make rc-benchmark`).
 2. Strict preflight before expensive work.
 3. Controlled TLS/H2 typical, large-payload and slow-consumer scenarios.
 4. A real sustainable-capacity boundary for both architectures, not a bounded smoke lower bound.
@@ -41,7 +43,9 @@ If controlled testing discovers a production defect, isolate it in a dedicated r
 Reuse `perf/host_info.py` and M12 strict semantics. Required:
 
 - Linux cgroup v2;
-- explicit gateway/backend/loadgen CPU sets;
+- explicit `PERF_GATEWAY_CPUSET`;
+- explicit `PERF_BACKEND_CPUSET`;
+- explicit `PERF_LOADGEN_CPUSET`;
 - all CPU sets online;
 - no overlap;
 - stable host fingerprint;
@@ -67,13 +71,15 @@ If both boundaries are not reached, extend the staircase deterministically and r
 
 Use a bounded maximum stream count/attempt count and fail closed with a clear `boundary_not_reached` reason if the configured ceiling is exhausted.
 
+When both boundaries are reached, the M12 decision must additionally be `native_preferred` with no decision reasons. An `inconclusive` result is a release blocker to investigate; do not keep extending the staircase just to search for a more favorable run.
+
 ### Scenarios
 
 At minimum:
 
 - typical grpc-web-text: 4 KiB DATA;
 - large text: 4 MiB DATA;
-- large 8 MiB when target hardware permits;
+- 8 MiB when target hardware permits, otherwise an explicit recorded skip rationale;
 - binary large-payload diagnostic baseline where useful;
 - slow-consumer/backpressure.
 
@@ -82,6 +88,8 @@ SLO thresholds are service/environment inputs. Do not invent production SLO valu
 ### Repeats
 
 Release-quality selected attempt: minimum five strict repeats. Preserve all `repeat-NN` raw JSON and stats.
+
+Manifest repeat count, decision repeat count and raw `repeat-*` directory count must agree exactly.
 
 ### Decision
 
@@ -104,6 +112,8 @@ The M15 summary should expose, for each scenario:
 - evidence class;
 - recommendation/reasons;
 - whether real boundaries were observed in every repeat.
+
+`perf/rc.py` is only an additional consistency/selection layer. It must verify that every raw `capacity.json.scenario` matches the M12 manifest and that `first_failed_streams`, when present, is strictly greater than `max_sustainable_streams`.
 
 ## Soak
 
@@ -143,10 +153,14 @@ Reject or leave inconclusive:
 - dirty source tree;
 - missing/invalid strict preflight;
 - mixed host fingerprints;
+- mixed source SHA, NGINX version or compiler across scenarios;
 - fewer than five release repeats;
+- manifest/decision/raw repeat-count mismatch;
 - missing capacity artifacts;
+- capacity scenario parameters that differ from the controlled manifest;
+- invalid capacity ordering (`first_failed_streams <= max_sustainable_streams`);
 - either architecture without an observed first failing capacity level;
-- mismatched scenario parameters;
+- M12 decision other than `native_preferred` or non-empty decision reasons;
 - shared CI / `harness_only` evidence;
 - missing SLO input;
 - malformed reports;
@@ -160,15 +174,19 @@ Keep orchestration logic as pure/testable Python where possible. Unit tests must
 - both boundaries reached;
 - legacy boundary missing;
 - native boundary missing;
+- boundaries reached but decision inconclusive;
 - mixed host fingerprint;
 - harness-only result;
 - too few repeats;
-- malformed/missing capacity files;
+- repeat-count mismatch;
+- scenario mismatch;
+- malformed/invalid capacity ordering;
 - deterministic staircase extension and maximum ceiling;
-- aggregate summary across multiple scenarios.
+- aggregate summary across multiple scenarios;
+- mixed NGINX/compiler aggregation.
 
-CI may exercise synthetic fixtures and a very small harness-only run, but must assert that it cannot produce release-quality controlled evidence.
+CI may exercise synthetic fixtures and shell syntax, but must not perform or claim release-quality controlled measurements.
 
 ## Exit
 
-M15 code can merge when its mechanics are green. Actual release completion additionally requires real controlled-host artifacts, >=2h strict soak, staging acceptance, M14 `controlled/release_candidate` evidence, and then a manual tag/release decision.
+M15 code can merge when its mechanics are green and review-complete. Actual release completion additionally requires real controlled-host artifacts, >=2h strict soak, recommended 8h soak (or explicit documented release decision), staging acceptance, M14 `controlled/release_candidate` evidence, and then a manual tag/release decision.
