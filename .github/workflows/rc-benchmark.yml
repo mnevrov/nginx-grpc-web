@@ -12,7 +12,12 @@ on:
       - "tests/browser/playwright.staging.config.ts"
       - "tests/browser/staging/**"
       - "scripts/run-staging-browser.sh"
+      - "scripts/staging-evidence.sh"
+      - "scripts/rc-release-check.sh"
+      - "scripts/m15-check.sh"
       - "staging/**"
+      - "release/m15.py"
+      - "release/test_m15.py"
       - ".github/workflows/rc-benchmark.yml"
       - "Makefile"
       - "docs/**"
@@ -42,12 +47,17 @@ jobs:
       - name: M15 RC soak provenance failure-mode tests
         run: make rc-soak-test
       - name: M15 staging/rollback evidence failure-mode tests
-        run: python3 staging/test_evidence.py -q
-      - name: RC operator shell syntax
+        run: make staging-evidence-test
+      - name: M15 final release-readiness failure-mode tests
+        run: make m15-evidence-test
+      - name: M15 operator shell syntax
         run: |
           bash -n perf/run-rc.sh
           bash -n perf/run-rc-soak.sh
           bash -n scripts/run-staging-browser.sh
+          bash -n scripts/staging-evidence.sh
+          bash -n scripts/rc-release-check.sh
+          bash -n scripts/m15-check.sh
       - name: Staircase CLI smoke
         run: |
           set -euo pipefail
