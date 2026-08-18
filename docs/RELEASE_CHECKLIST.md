@@ -206,13 +206,13 @@ Artifact устанавливается тем же способом, котор
 Policy exception for `v0.1.0`: тег создаётся после закрытия source/CI/artifact/package gates, **без** ожидания controlled/soak/staging/rollback (разделы 5/6/8), которые сознательно deferred в Issue #20.
 
 - [x] M14/M15 code/tooling merged в `main`;
-- [ ] exact final tag-target commit находится в `main` и имеет green post-merge CI;
+- [x] exact final tag-target commit находится в `main` и имеет green post-merge CI (`2bb375437a46c59e0a099a56aa69a8be332721a8`, `ci` run `32072809635`);
 - [ ] final controlled M14 bundle — deferred (Issue #20);
 - [ ] staging acceptance — deferred (Issue #20);
-- [ ] tag `v0.1.0` вручную указывает на exact final tag-target commit;
-- [ ] GitHub Release создан из `docs/RELEASE_NOTES_v0.1.0.md`;
-- [ ] published artifact checksums приложены к release;
-- [ ] final CI/tag references проверены перед публикацией.
+- [x] tag `v0.1.0` вручную указывает на exact final tag-target commit (published by `publish-v0.1.0` workflow run `32072968401`);
+- [x] GitHub Release создан из `docs/RELEASE_NOTES_v0.1.0.md`: https://github.com/mnevrov/nginx-grpc-web/releases/tag/v0.1.0;
+- [x] published artifact checksums приложены к release (`SHA256SUMS`, verified locally against the downloaded `.so`);
+- [x] final CI/tag references проверены перед публикацией.
 
 ## 10. Production rollout
 
